@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>家庭聊天</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div id="app">
+        <div id="login-container">
+            <div class="auth-box">
+                <h2>家庭聊天</h2>
+                <div id="login-form">
+                    <input type="text" id="login-username" placeholder="用户名">
+                    <input type="password" id="login-password" placeholder="密码">
+                    <button onclick="login()">登录</button>
+                    <p class="switch-text">还没有账号? <a href="#" onclick="showRegister()">注册</a></p>
+                </div>
+                <div id="register-form" style="display: none;">
+                    <input type="text" id="register-username" placeholder="用户名">
+                    <input type="password" id="register-password" placeholder="密码">
+                    <input type="password" id="register-password-confirm" placeholder="确认密码">
+                    <button onclick="register()">注册</button>
+                    <p class="switch-text">已有账号? <a href="#" onclick="showLogin()">登录</a></p>
+                </div>
+                <p id="auth-message"></p>
+            </div>
+        </div>
+
+        <div id="chat-container" style="display: none;">
+            <div class="sidebar">
+                <div class="user-info">
+                    <span id="current-user"></span>
+                    <span id="connection-status" style="margin-left: 10px; font-size: 12px;"></span>
+                    <button onclick="logout()" class="logout-btn">退出</button>
+                </div>
+                <div class="search-section">
+                    <input type="text" id="search-input" placeholder="搜索用户...">
+                    <button onclick="searchUsers()">搜索</button>
+                </div>
+                <div id="search-results"></div>
+                <div class="friends-header">
+                    <h3>好友列表</h3>
+                    <button onclick="refreshFriends()" class="refresh-btn">刷新</button>
+                </div>
+                <div id="friend-requests-section" style="display: none;">
+                    <h4 onclick="toggleFriendRequests()" style="cursor: pointer;">好友请求 ▼</h4>
+                    <div id="friend-requests-list"></div>
+                </div>
+                <div id="friends-list"></div>
+            </div>
+            <div class="chat-area">
+                <div id="no-chat-selected">
+                    <p>选择一个好友开始聊天</p>
+                </div>
+                <div id="chat-window" style="display: none;">
+                    <div class="chat-header">
+                        <h3 id="chat-with-username"></h3>
+                    </div>
+                    <div id="messages-container"></div>
+                    <div class="message-input">
+                        <input type="text" id="message-input" placeholder="输入消息..." onkeypress="handleKeyPress(event)">
+                        <button onclick="sendMessage()">发送</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script src="/static/chat.js"></script>
+</body>
+</html>
