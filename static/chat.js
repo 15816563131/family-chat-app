@@ -370,17 +370,25 @@ async function loadMessages(friendId) {
 }
 
 function addMessageToUI(message) {
-    // 检查是否已经显示了这条消息
-    const existingMessages = document.querySelectorAll('.message-content > div:first-child');
-    for (let div of existingMessages) {
-        if (div.textContent === message.content) {
-            return; // 消息已存在,不重复添加
-        }
+    const messagesContainer = document.getElementById('messages-container');
+    
+    // 检查是否已经有相同ID的消息
+    if (message.id && document.querySelector(`[data-message-id="${message.id}"]`)) {
+        return; // 消息已存在，不重复添加
     }
     
-    const messagesContainer = document.getElementById('messages-container');
     const messageElement = document.createElement('div');
     messageElement.className = 'message ' + (message.is_mine ? 'sent' : 'received');
+    // 给消息添加 data-id 属性
+    if (message.id) {
+        messageElement.dataset.messageId = message.id;
+    }
+    // 如果是临时消息，添加标记
+    if (message.is_temporary) {
+        messageElement.dataset.temporary = 'true';
+        messageElement.dataset.tempContent = message.content;
+        messageElement.dataset.tempTimestamp = message.timestamp;
+    }
     
     const time = new Date(message.timestamp).toLocaleString('zh-CN', {
         month: '2-digit',
@@ -404,11 +412,24 @@ const displayedMessageIds = new Set();
 
 function handleReceivedMessage(message) {
     // 避免重复显示消息
-    if (displayedMessageIds.has(message.id)) {
+    if (message.id && displayedMessageIds.has(message.id)) {
         return;
     }
     
-    displayedMessageIds.add(message.id);
+    if (message.id) {
+        displayedMessageIds.add(message.id);
+    }
+    
+    // 如果是自己的消息，尝试移除对应的临时消息
+    if (message.is_mine) {
+        const tempMessages = document.querySelectorAll('[data-temporary="true"]');
+        for (let temp of tempMessages) {
+            if (temp.dataset.tempContent === message.content) {
+                temp.remove();
+                break;
+            }
+        }
+    }
     
     // 只有当消息来自当前聊天的好友时才显示
     if (message.sender_id === currentFriendId || message.receiver_id === currentFriendId) {
@@ -435,12 +456,13 @@ function sendMessage() {
     
     // 立即在发送方显示消息，优化用户体验
     const temporaryMessage = {
-        id: Date.now(),
+        id: null,
         sender_id: currentUser.id,
         receiver_id: currentFriendId,
         content: content,
         timestamp: new Date().toISOString(),
-        is_mine: true
+        is_mine: true,
+        is_temporary: true
     };
     
     addMessageToUI(temporaryMessage);
