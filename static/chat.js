@@ -190,10 +190,15 @@ async function loadFriends() {
         friends.forEach(friend => {
             const friendElement = document.createElement('div');
             friendElement.className = 'friend-item' + (currentFriendId === friend.id ? ' active' : '');
+            friendElement.dataset.friendId = friend.id;
             friendElement.onclick = () => selectFriend(friend);
             
+            // 检查未读消息数量
+            const unreadCount = unreadMessages[friend.id] || 0;
+            const unreadBadge = unreadCount > 0 ? `<span class="unread-badge">${unreadCount > 99 ? '99+' : unreadCount}</span>` : '';
+            
             friendElement.innerHTML = `
-                <div class="friend-name">${friend.username}</div>
+                <div class="friend-name">${friend.username}${unreadBadge}</div>
                 <div class="last-message">${friend.last_message || '暂无消息'}</div>
             `;
             
@@ -409,6 +414,8 @@ function addMessageToUI(message) {
 
 // 用来避免重复显示的消息ID集合
 const displayedMessageIds = new Set();
+// 未读消息计数
+const unreadMessages = {};
 
 function handleReceivedMessage(message) {
     // 避免重复显示消息
@@ -431,19 +438,71 @@ function handleReceivedMessage(message) {
         }
     }
     
-    // 只有当消息来自当前聊天的好友时才显示
-    if (message.sender_id === currentFriendId || message.receiver_id === currentFriendId) {
+    // 记录未读消息
+    if (!message.is_mine) {
+        const senderId = message.sender_id;
+        if (!unreadMessages[senderId]) {
+            unreadMessages[senderId] = 0;
+        }
+        unreadMessages[senderId]++;
+    }
+    
+    // 判断是否应该显示在当前聊天窗口
+    const isInCurrentChat = (message.sender_id === currentFriendId || message.receiver_id === currentFriendId);
+    
+    if (isInCurrentChat) {
+        // 如果在当前聊天窗口，显示消息
         addMessageToUI(message);
         const messagesContainer = document.getElementById('messages-container');
         messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        
+        // 如果是收到的消息，清除该好友的未读计数
+        if (!message.is_mine) {
+            unreadMessages[currentFriendId] = 0;
+        }
+    } else if (!message.is_mine) {
+        // 不在当前聊天窗口且是收到的消息，显示通知
+        showMessageNotification(message);
     }
     
+    // 记录消息
     if (!receivedMessages[message.sender_id]) {
         receivedMessages[message.sender_id] = [];
     }
     receivedMessages[message.sender_id].push(message);
     
+    // 刷新好友列表，更新未读状态
     loadFriends();
+}
+
+function showMessageNotification(message) {
+    // 简单的视觉提示：闪烁好友列表
+    const friendItems = document.querySelectorAll('.friend-item');
+    friendItems.forEach(item => {
+        const friendId = parseInt(item.dataset.friendId);
+        if (friendId === message.sender_id) {
+            item.classList.add('has-unread');
+            // 如果有未读计数，显示它
+            const count = unreadMessages[message.sender_id] || 0;
+            if (count > 0) {
+                let badge = item.querySelector('.unread-badge');
+                if (!badge) {
+                    badge = document.createElement('span');
+                    badge.className = 'unread-badge';
+                    item.appendChild(badge);
+                }
+                badge.textContent = count > 99 ? '99+' : count;
+            }
+        }
+    });
+    
+    // 可选：浏览器通知（如果用户授权）
+    if (Notification.permission === 'granted') {
+        new Notification('新消息', {
+            body: message.content.substring(0, 50),
+            icon: '/static/icon.png'
+        });
+    }
 }
 
 function sendMessage() {
