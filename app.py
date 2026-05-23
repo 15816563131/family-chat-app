@@ -302,12 +302,14 @@ def handle_send_message(data):
 
 
 if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 8080))
+    
     with app.app_context():
         db.create_all()
     
     print("=" * 50)
     print("家庭聊天软件正在启动...")
-    print("访问地址: http://localhost:8080")
+    print(f"访问地址: http://localhost:{port}")
     print("=" * 50)
     
-    socketio.run(app, host='0.0.0.0', port=8080, debug=False, use_reloader=False, allow_unsafe_werkzeug=True)
+    socketio.run(app, host='0.0.0.0', port=port, debug=False, use_reloader=False, allow_unsafe_werkzeug=True)
