@@ -8,9 +8,7 @@ body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     min-height: 100vh;
-    display: flex;
-    justify-content: center;
-    align-items: center;
+    overflow-y: auto;
     padding: 20px;
 }
 
@@ -18,6 +16,7 @@ body {
     width: 100%;
     max-width: 1200px;
     height: 90vh;
+    margin: 0 auto;
 }
 
 #login-container {
@@ -364,6 +363,7 @@ body {
     display: flex;
     flex-direction: column;
     background: white;
+    min-height: 0;
 }
 
 #no-chat-selected {
@@ -380,12 +380,14 @@ body {
     flex: 1;
     display: flex;
     flex-direction: column;
+    min-height: 0;
 }
 
 .chat-header {
     padding: 20px 28px;
     background: white;
     border-bottom: 1px solid #e5e7eb;
+    flex-shrink: 0;
 }
 
 .chat-header h3 {
@@ -400,6 +402,7 @@ body {
     overflow-y: auto;
     padding: 24px;
     background: linear-gradient(to bottom, #f9fafb, #f3f4f6);
+    min-height: 0;
 }
 
 .message {
@@ -451,6 +454,9 @@ body {
     border-top: 1px solid #e5e7eb;
     display: flex;
     gap: 12px;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 100;
 }
 
 .message-input input {
@@ -521,6 +527,14 @@ body {
 }
 
 @media (max-width: 768px) {
+    body {
+        padding: 10px;
+    }
+
+    #app {
+        height: calc(100vh - 20px);
+    }
+
     #chat-container {
         flex-direction: column;
     }
