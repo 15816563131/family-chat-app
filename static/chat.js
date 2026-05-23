@@ -407,6 +407,12 @@ function handleReceivedMessage(message) {
         }
         unreadMessages[senderId]++;
         console.log('未读消息计数:', unreadMessages);
+        
+        // 显示系统通知
+        if (typeof showNotification === 'function') {
+            const senderName = '好友消息';
+            showNotification('家庭聊天 - ' + senderName, message.content);
+        }
     }
     
     const isInCurrentChat = (message.sender_id === currentFriendId || message.receiver_id === currentFriendId);

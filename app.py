@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, send_file
 from flask_sqlalchemy import SQLAlchemy
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_cors import CORS
@@ -77,6 +77,16 @@ class Blacklist(db.Model):
 @app.route('/')
 def index():
     return render_template('index.html')
+
+
+@app.route('/static/manifest.json')
+def manifest():
+    return send_file('static/manifest.json', mimetype='application/manifest+json')
+
+
+@app.route('/static/sw.js')
+def service_worker():
+    return send_file('static/sw.js', mimetype='application/javascript')
 
 
 @app.route('/api/register', methods=['POST'])

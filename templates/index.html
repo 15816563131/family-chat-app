@@ -3,8 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>家庭聊天 - v1.2.0</title>
+    <title>家庭聊天 - v1.3.0</title>
     <link rel="stylesheet" href="/static/style.css">
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#667eea">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="家庭聊天">
 </head>
 <body>
     <div id="app">
@@ -174,5 +179,40 @@
 
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
     <script src="/static/chat.js"></script>
+    <script>
+        // PWA Service Worker 注册
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/static/sw.js')
+                .then(reg => console.log('Service Worker 注册成功'))
+                .catch(err => console.log('Service Worker 注册失败:', err));
+        }
+        
+        // 请求通知权限
+        function requestNotificationPermission() {
+            if ('Notification' in window && Notification.permission === 'default') {
+                Notification.requestPermission().then(permission => {
+                    if (permission === 'granted') {
+                        console.log('通知权限已授予');
+                    }
+                });
+            }
+        }
+        
+        // 显示通知
+        function showNotification(title, body) {
+            if ('Notification' in window && Notification.permission === 'granted') {
+                new Notification(title, {
+                    body: body,
+                    icon: '/static/icon-192.png',
+                    badge: '/static/icon-192.png',
+                    vibrate: [100, 50, 100],
+                    tag: 'family-chat'
+                });
+            }
+        }
+        
+        // 页面加载时请求权限
+        window.addEventListener('load', requestNotificationPermission);
+    </script>
 </body>
 </html>
