@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, session
+from flask import Flask, render_template, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_cors import CORS
@@ -21,6 +21,8 @@ class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(120), nullable=False)
+    avatar = db.Column(db.String(200), default='')
+    bio = db.Column(db.String(500), default='这个人很懒，什么都没写~')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     sent_requests = db.relationship('FriendRequest', foreign_keys='FriendRequest.sender_id', backref='sender', lazy='dynamic')
@@ -31,6 +33,8 @@ class User(db.Model):
     
     messages_sent = db.relationship('Message', foreign_keys='Message.sender_id', backref='sender_msg', lazy='dynamic')
     messages_received = db.relationship('Message', foreign_keys='Message.receiver_id', backref='receiver_msg', lazy='dynamic')
+    
+    blocked_list = db.relationship('Blacklist', foreign_keys='Blacklist.user_id', backref='user', lazy='dynamic')
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -61,6 +65,13 @@ class Message(db.Model):
     content = db.Column(db.Text, nullable=False)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     read = db.Column(db.Boolean, default=False)
+
+
+class Blacklist(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    blocked_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
 @app.route('/')
@@ -102,7 +113,55 @@ def login():
     if not user or not user.check_password(password):
         return jsonify({'error': '用户名或密码错误'}), 401
     
-    return jsonify({'message': '登录成功', 'user_id': user.id, 'username': user.username}), 200
+    return jsonify({
+        'message': '登录成功',
+        'user_id': user.id,
+        'username': user.username,
+        'bio': user.bio,
+        'avatar': user.avatar,
+        'created_at': user.created_at.isoformat()
+    }), 200
+
+
+@app.route('/api/user/<int:user_id>', methods=['GET'])
+def get_user(user_id):
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'error': '用户不存在'}), 404
+    
+    return jsonify({
+        'id': user.id,
+        'username': user.username,
+        'bio': user.bio,
+        'avatar': user.avatar,
+        'created_at': user.created_at.isoformat()
+    }), 200
+
+
+@app.route('/api/user/<int:user_id>', methods=['PUT'])
+def update_user(user_id):
+    data = request.json
+    user = User.query.get(user_id)
+    
+    if not user:
+        return jsonify({'error': '用户不存在'}), 404
+    
+    if data.get('username'):
+        user.username = data['username']
+    if data.get('bio') is not None:
+        user.bio = data['bio']
+    if data.get('avatar') is not None:
+        user.avatar = data['avatar']
+    if data.get('password'):
+        user.set_password(data['password'])
+    
+    db.session.commit()
+    return jsonify({'message': '更新成功', 'user': {
+        'id': user.id,
+        'username': user.username,
+        'bio': user.bio,
+        'avatar': user.avatar
+    }}), 200
 
 
 @app.route('/api/search', methods=['GET'])
@@ -114,7 +173,25 @@ def search_users():
         return jsonify([])
     
     users = User.query.filter(User.username.contains(username), User.id != current_user_id).all()
-    return jsonify([{'id': u.id, 'username': u.username} for u in users])
+    
+    result = []
+    for u in users:
+        is_friend = Friendship.query.filter(
+            ((Friendship.user1_id == current_user_id) & (Friendship.user2_id == u.id)) |
+            ((Friendship.user1_id == u.id) & (Friendship.user2_id == current_user_id))
+        ).first()
+        
+        is_blocked = Blacklist.query.filter_by(user_id=current_user_id, blocked_user_id=u.id).first()
+        
+        result.append({
+            'id': u.id,
+            'username': u.username,
+            'avatar': u.avatar,
+            'is_friend': bool(is_friend),
+            'is_blocked': bool(is_blocked)
+        })
+    
+    return jsonify(result)
 
 
 @app.route('/api/friend_request', methods=['POST'])
@@ -160,7 +237,8 @@ def get_friend_requests(user_id):
             result.append({
                 'id': req.id,
                 'sender_id': sender.id,
-                'sender_username': sender.username
+                'sender_username': sender.username,
+                'sender_avatar': sender.avatar
             })
     return jsonify(result)
 
@@ -214,11 +292,85 @@ def get_friends(user_id):
             friends.append({
                 'id': friend.id,
                 'username': friend.username,
+                'avatar': friend.avatar,
                 'last_message': last_message.content if last_message else None,
                 'last_message_time': last_message.timestamp.isoformat() if last_message else None
             })
     
     return jsonify(friends)
+
+
+@app.route('/api/friend/delete', methods=['POST'])
+def delete_friend():
+    data = request.json
+    user_id = data.get('user_id')
+    friend_id = data.get('friend_id')
+    
+    friendship = Friendship.query.filter(
+        ((Friendship.user1_id == user_id) & (Friendship.user2_id == friend_id)) |
+        ((Friendship.user1_id == friend_id) & (Friendship.user2_id == user_id))
+    ).first()
+    
+    if not friendship:
+        return jsonify({'error': '不是好友关系'}), 400
+    
+    db.session.delete(friendship)
+    db.session.commit()
+    
+    return jsonify({'message': '已删除好友'}), 200
+
+
+@app.route('/api/blacklist/<int:user_id>', methods=['GET'])
+def get_blacklist(user_id):
+    blacklist = Blacklist.query.filter_by(user_id=user_id).all()
+    result = []
+    for item in blacklist:
+        blocked_user = User.query.get(item.blocked_user_id)
+        if blocked_user:
+            result.append({
+                'id': item.id,
+                'blocked_user_id': blocked_user.id,
+                'blocked_user_name': blocked_user.username,
+                'blocked_user_avatar': blocked_user.avatar,
+                'created_at': item.created_at.isoformat()
+            })
+    return jsonify(result)
+
+
+@app.route('/api/blacklist/add', methods=['POST'])
+def add_to_blacklist():
+    data = request.json
+    user_id = data.get('user_id')
+    blocked_user_id = data.get('blocked_user_id')
+    
+    if user_id == blocked_user_id:
+        return jsonify({'error': '不能拉黑自己'}), 400
+    
+    existing = Blacklist.query.filter_by(user_id=user_id, blocked_user_id=blocked_user_id).first()
+    if existing:
+        return jsonify({'error': '已经拉黑了'}), 400
+    
+    blacklist_item = Blacklist(user_id=user_id, blocked_user_id=blocked_user_id)
+    db.session.add(blacklist_item)
+    db.session.commit()
+    
+    return jsonify({'message': '已加入黑名单'}), 200
+
+
+@app.route('/api/blacklist/remove', methods=['POST'])
+def remove_from_blacklist():
+    data = request.json
+    user_id = data.get('user_id')
+    blocked_user_id = data.get('blocked_user_id')
+    
+    blacklist_item = Blacklist.query.filter_by(user_id=user_id, blocked_user_id=blocked_user_id).first()
+    if not blacklist_item:
+        return jsonify({'error': '未在黑名单中'}), 400
+    
+    db.session.delete(blacklist_item)
+    db.session.commit()
+    
+    return jsonify({'message': '已从黑名单移除'}), 200
 
 
 @app.route('/api/messages/<int:user_id>/<int:friend_id>', methods=['GET'])
@@ -275,6 +427,11 @@ def handle_send_message(data):
         content = data.get('content')
         
         if not sender_id or not receiver_id or not content:
+            return
+        
+        is_blocked = Blacklist.query.filter_by(user_id=receiver_id, blocked_user_id=sender_id).first()
+        if is_blocked:
+            emit('message_failed', {'error': '对方已拉黑你'}, room=str(sender_id))
             return
         
         message = Message(sender_id=sender_id, receiver_id=receiver_id, content=content)

@@ -3,27 +3,27 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>家庭聊天</title>
+    <title>家庭聊天 - v1.2.0</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <div id="app">
         <div id="login-container">
             <div class="auth-box">
-                <h2>家庭聊天</h2>
-                <div class="version-badge">v1.0.2</div>
+                <h2>🌈 家庭聊天</h2>
+                <div class="version-badge">v1.2.0</div>
                 <div id="login-form">
-                    <input type="text" id="login-username" placeholder="用户名">
-                    <input type="password" id="login-password" placeholder="密码">
+                    <input type="text" id="login-username" placeholder="👤 用户名">
+                    <input type="password" id="login-password" placeholder="🔒 密码">
                     <button onclick="login()">登录</button>
-                    <p class="switch-text">还没有账号? <a href="#" onclick="showRegister()">注册</a></p>
+                    <p class="switch-text">还没有账号？<a onclick="showRegister()">立即注册</a></p>
                 </div>
                 <div id="register-form" style="display: none;">
-                    <input type="text" id="register-username" placeholder="用户名">
-                    <input type="password" id="register-password" placeholder="密码">
-                    <input type="password" id="register-password-confirm" placeholder="确认密码">
+                    <input type="text" id="register-username" placeholder="👤 用户名">
+                    <input type="password" id="register-password" placeholder="🔒 密码">
+                    <input type="password" id="register-password-confirm" placeholder="🔒 确认密码">
                     <button onclick="register()">注册</button>
-                    <p class="switch-text">已有账号? <a href="#" onclick="showLogin()">登录</a></p>
+                    <p class="switch-text">已有账号？<a onclick="showLogin()">立即登录</a></p>
                 </div>
                 <p id="auth-message"></p>
             </div>
@@ -32,46 +32,141 @@
         <div id="chat-container" style="display: none;">
             <div class="sidebar">
                 <div class="user-info">
-                    <div>
-                        <span id="current-user"></span>
-                        <span id="sync-status" style="margin-left: 10px; font-size: 12px; opacity: 0.7;"></span>
+                    <div class="user-info-left">
+                        <div class="user-avatar" id="user-avatar" onclick="openProfile()">
+                            <span id="user-avatar-initial">?</span>
+                        </div>
+                        <div class="user-details">
+                            <div class="user-name" id="current-user"></div>
+                            <div class="user-status">
+                                <span id="connection-status" style="font-size: 12px;"></span>
+                            </div>
+                        </div>
                     </div>
-                    <div style="display: flex; align-items: center; gap: 10px;">
-                        <span id="connection-status" style="font-size: 12px;"></span>
-                        <button onclick="logout()" class="logout-btn">退出</button>
+                    <button onclick="logout()" class="logout-btn">🚪</button>
+                </div>
+                
+                <div class="tabs">
+                    <div class="tab active" data-tab="friends" onclick="switchTab('friends')">
+                        📱 好友
+                    </div>
+                    <div class="tab" data-tab="contacts" onclick="switchTab('contacts')">
+                        📖 通讯录
+                    </div>
+                    <div class="tab" data-tab="blacklist" onclick="switchTab('blacklist')">
+                        ⛔ 黑名单
                     </div>
                 </div>
-                <div class="search-section">
-                    <input type="text" id="search-input" placeholder="搜索用户...">
-                    <button onclick="searchUsers()">搜索</button>
+
+                <div class="tab-content" id="friends-tab">
+                    <div class="search-section">
+                        <input type="text" id="search-input" placeholder="🔍 搜索用户...">
+                        <button onclick="searchUsers()">搜索</button>
+                    </div>
+                    <div id="search-results"></div>
+                    <div class="friends-header">
+                        <h3>好友列表</h3>
+                        <button onclick="refreshFriends()" class="refresh-btn">🔄</button>
+                    </div>
+                    <div id="friend-requests-section" style="display: none;">
+                        <h4 onclick="toggleFriendRequests()" style="cursor: pointer;">📬 好友请求 ▼</h4>
+                        <div id="friend-requests-list"></div>
+                    </div>
+                    <div id="friends-list"></div>
                 </div>
-                <div id="search-results"></div>
-                <div class="friends-header">
-                    <h3>好友列表</h3>
-                    <button onclick="refreshFriends()" class="refresh-btn">刷新</button>
+
+                <div class="tab-content" id="contacts-tab" style="display: none;">
+                    <div class="contacts-content">
+                        <h3>✨ 我的通讯录</h3>
+                        <div id="contacts-list"></div>
+                    </div>
                 </div>
-                <div id="friend-requests-section" style="display: none;">
-                    <h4 onclick="toggleFriendRequests()" style="cursor: pointer;">好友请求 ▼</h4>
-                    <div id="friend-requests-list"></div>
-                </div>
-                <div id="friends-list"></div>
-                <div class="sidebar-footer">
-                    <span class="version-text">v1.0.2</span>
+
+                <div class="tab-content" id="blacklist-tab" style="display: none;">
+                    <div class="blacklist-content">
+                        <h3>⛔ 黑名单</h3>
+                        <div id="blacklist-list"></div>
+                    </div>
                 </div>
             </div>
+            
             <div class="chat-area">
                 <div id="no-chat-selected">
+                    <div class="no-chat-icon">💬</div>
                     <p>选择一个好友开始聊天</p>
                 </div>
                 <div id="chat-window" style="display: none;">
                     <div class="chat-header">
-                        <h3 id="chat-with-username"></h3>
+                        <div class="chat-header-info">
+                            <div class="friend-avatar" id="friend-avatar">
+                                <span id="friend-avatar-initial">?</span>
+                            </div>
+                            <div>
+                                <h3 id="chat-with-username"></h3>
+                            </div>
+                        </div>
+                        <div class="chat-header-actions">
+                            <button class="action-btn" onclick="openFriendProfile()">👤</button>
+                        </div>
                     </div>
                     <div id="messages-container"></div>
                     <div class="message-input">
-                        <input type="text" id="message-input" placeholder="输入消息..." onkeypress="handleKeyPress(event)">
-                        <button onclick="sendMessage()">发送</button>
+                        <input type="text" id="message-input" placeholder="💬 输入消息..." onkeypress="handleKeyPress(event)">
+                        <button onclick="sendMessage()">发送 🚀</button>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="profile-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>👤 个人资料</h2>
+                <button class="close-btn" onclick="closeProfile()">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="profile-avatar">
+                    <span id="profile-avatar-initial">?</span>
+                </div>
+                <div class="profile-field">
+                    <label>用户名</label>
+                    <input type="text" id="profile-username" placeholder="用户名">
+                </div>
+                <div class="profile-field">
+                    <label>个性签名</label>
+                    <textarea id="profile-bio" placeholder="这个人很懒，什么都没写~"></textarea>
+                </div>
+                <div class="profile-field">
+                    <label>新密码（不修改请留空）</label>
+                    <input type="password" id="profile-password" placeholder="新密码">
+                </div>
+                <button class="save-btn" onclick="saveProfile()">💾 保存修改</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="friend-profile-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>👤 好友资料</h2>
+                <button class="close-btn" onclick="closeFriendProfile()">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="profile-avatar">
+                    <span id="friend-profile-avatar">?</span>
+                </div>
+                <div class="profile-field">
+                    <label>用户名</label>
+                    <input type="text" id="friend-profile-username" readonly>
+                </div>
+                <div class="profile-field">
+                    <label>个性签名</label>
+                    <textarea id="friend-profile-bio" readonly></textarea>
+                </div>
+                <div class="friend-actions">
+                    <button class="delete-btn" onclick="deleteFriend()">❌ 删除好友</button>
+                    <button class="block-btn" onclick="blockFriend()">⛔ 加入黑名单</button>
                 </div>
             </div>
         </div>

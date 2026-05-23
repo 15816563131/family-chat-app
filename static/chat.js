@@ -1,10 +1,12 @@
 let socket;
 let currentUser = null;
 let currentFriendId = null;
+let currentFriendInfo = null;
 let receivedMessages = {};
 let isConnected = false;
 let reconnectTimer = null;
 let lastMessageCheckTime = Date.now();
+let currentTab = 'friends';
 
 function showRegister() {
     document.getElementById('login-form').style.display = 'none';
@@ -127,111 +129,7 @@ function logout() {
     showLogin();
 }
 
-function initChat() {
-    document.getElementById('login-container').style.display = 'none';
-    document.getElementById('chat-container').style.display = 'flex';
-    document.getElementById('current-user').textContent = `欢迎, ${currentUser.username}`;
-    
-    socket = io({
-        transports: ['websocket', 'polling'],
-        reconnection: true,
-        reconnectionAttempts: Infinity,
-        reconnectionDelay: 1000,
-        reconnectionDelayMax: 5000,
-        timeout: 20000
-    });
-    
-    function updateConnectionStatus(status, text) {
-        const statusElement = document.getElementById('connection-status');
-        if (statusElement) {
-            statusElement.style.color = status;
-            statusElement.textContent = text;
-        }
-    }
-    
-    function showSyncStatus(message, isError = false) {
-        const syncElement = document.getElementById('sync-status');
-        if (syncElement) {
-            syncElement.textContent = message;
-            syncElement.style.color = isError ? '#FF5722' : '#4CAF50';
-            syncElement.style.opacity = '1';
-            setTimeout(() => {
-                syncElement.style.opacity = '0.7';
-            }, 2000);
-        }
-    }
-    
-    socket.on('connect', () => {
-        console.log('✅ 已连接到服务器');
-        isConnected = true;
-        updateConnectionStatus('#4CAF50', '● 已连接');
-        showSyncStatus('连接成功，开始同步消息...');
-        socket.emit('join', { user_id: currentUser.id });
-        
-        if (currentFriendId) {
-            loadMessages(currentFriendId);
-        }
-        loadFriends();
-    });
-    
-    socket.on('disconnect', (reason) => {
-        console.log('❌ 与服务器断开连接:', reason);
-        isConnected = false;
-        updateConnectionStatus('#FF5722', '● 已断开');
-        showSyncStatus('连接断开，正在尝试重新连接...', true);
-    });
-    
-    socket.on('reconnect', (attemptNumber) => {
-        console.log('🔄 重连成功');
-        isConnected = true;
-        updateConnectionStatus('#4CAF50', '● 已连接');
-        showSyncStatus('已重连，正在同步...');
-        socket.emit('join', { user_id: currentUser.id });
-        
-        if (currentFriendId) {
-            loadMessages(currentFriendId);
-        }
-        loadFriends();
-    });
-    
-    socket.on('reconnect_attempt', (attemptNumber) => {
-        console.log(`🔄 正在尝试重连... (第${attemptNumber}次)`);
-        updateConnectionStatus('#FFC107', '● 重连中');
-    });
-    
-    socket.on('reconnect_error', (error) => {
-        console.log('❌ 重连失败:', error);
-        showSyncStatus('重连失败，继续尝试...', true);
-    });
-    
-    socket.on('receive_message', (message) => {
-        console.log('📨 收到消息:', message);
-        handleReceivedMessage(message);
-    });
-    
-    socket.on('connect_error', (error) => {
-        console.log('❌ 连接错误:', error);
-        isConnected = false;
-        updateConnectionStatus('#FF5722', '● 连接错误');
-        showSyncStatus('连接错误，请检查网络', true);
-    });
-    
-    loadFriends();
-    loadFriendRequests();
-    
-    setInterval(() => {
-        loadFriendRequests();
-        if (currentFriendId && isConnected) {
-            loadMessages(currentFriendId);
-        }
-    }, 30000);
-    
-    setInterval(() => {
-        if (!isConnected) {
-            showSyncStatus('正在尝试建立连接...', true);
-        }
-    }, 5000);
-}
+
 
 async function loadFriends() {
     try {
@@ -620,6 +518,402 @@ function handleKeyPress(event) {
     }
 }
 
+function getAvatarInitial(username) {
+    return username ? username.charAt(0).toUpperCase() : '?';
+}
+
+function updateUserAvatar() {
+    const avatarInitial = getAvatarInitial(currentUser.username);
+    const avatarElements = document.querySelectorAll('#user-avatar, #profile-avatar');
+    avatarElements.forEach(el => {
+        if (el) el.textContent = avatarInitial;
+    });
+    const initialElement = document.getElementById('user-avatar-initial');
+    if (initialElement) initialElement.textContent = avatarInitial;
+}
+
+function switchTab(tab) {
+    currentTab = tab;
+    
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
+    
+    document.querySelectorAll('.tab-content').forEach(c => c.style.display = 'none');
+    document.getElementById(`${tab}-tab`).style.display = 'flex';
+    
+    if (tab === 'contacts') {
+        loadContacts();
+    } else if (tab === 'blacklist') {
+        loadBlacklist();
+    }
+}
+
+async function openProfile() {
+    try {
+        const response = await fetch(`/api/user/${currentUser.id}`);
+        const user = await response.json();
+        
+        document.getElementById('profile-avatar-initial').textContent = getAvatarInitial(user.username);
+        document.getElementById('profile-username').value = user.username || '';
+        document.getElementById('profile-bio').value = user.bio || '';
+        document.getElementById('profile-password').value = '';
+        document.getElementById('profile-modal').style.display = 'flex';
+    } catch (error) {
+        console.error('加载个人资料失败:', error);
+    }
+}
+
+function closeProfile() {
+    document.getElementById('profile-modal').style.display = 'none';
+}
+
+async function saveProfile() {
+    const username = document.getElementById('profile-username').value.trim();
+    const bio = document.getElementById('profile-bio').value.trim();
+    const password = document.getElementById('profile-password').value;
+    
+    if (!username) {
+        alert('用户名不能为空');
+        return;
+    }
+    
+    try {
+        const data = { username, bio };
+        if (password) {
+            data.password = password;
+        }
+        
+        const response = await fetch(`/api/user/${currentUser.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        
+        const result = await response.json();
+        
+        if (response.ok) {
+            currentUser.username = username;
+            localStorage.setItem('currentUser', JSON.stringify(currentUser));
+            document.getElementById('current-user').textContent = `欢迎, ${username}`;
+            updateUserAvatar();
+            closeProfile();
+            alert('保存成功！');
+        } else {
+            alert(result.error || '保存失败');
+        }
+    } catch (error) {
+        console.error('保存个人资料失败:', error);
+        alert('保存失败，请重试');
+    }
+}
+
+async function openFriendProfile() {
+    if (!currentFriendId) return;
+    
+    try {
+        const response = await fetch(`/api/user/${currentFriendId}`);
+        const user = await response.json();
+        
+        currentFriendInfo = user;
+        document.getElementById('friend-profile-avatar').textContent = getAvatarInitial(user.username);
+        document.getElementById('friend-profile-username').value = user.username || '';
+        document.getElementById('friend-profile-bio').value = user.bio || '';
+        document.getElementById('friend-profile-modal').style.display = 'flex';
+    } catch (error) {
+        console.error('加载好友资料失败:', error);
+    }
+}
+
+function closeFriendProfile() {
+    document.getElementById('friend-profile-modal').style.display = 'none';
+}
+
+async function deleteFriend() {
+    if (!currentFriendId) return;
+    if (!confirm('确定要删除这位好友吗？')) return;
+    
+    try {
+        const response = await fetch('/api/friend/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                user_id: currentUser.id,
+                friend_id: currentFriendId
+            })
+        });
+        
+        const result = await response.json();
+        
+        if (response.ok) {
+            closeFriendProfile();
+            currentFriendId = null;
+            currentFriendInfo = null;
+            document.getElementById('no-chat-selected').style.display = 'flex';
+            document.getElementById('chat-window').style.display = 'none';
+            loadFriends();
+            loadContacts();
+            alert('已删除好友');
+        } else {
+            alert(result.error || '删除失败');
+        }
+    } catch (error) {
+        console.error('删除好友失败:', error);
+        alert('删除失败，请重试');
+    }
+}
+
+async function blockFriend() {
+    if (!currentFriendId) return;
+    if (!confirm('确定要拉黑这位用户吗？拉黑后将无法接收对方消息。')) return;
+    
+    try {
+        const response = await fetch('/api/blacklist/add', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                user_id: currentUser.id,
+                blocked_user_id: currentFriendId
+            })
+        });
+        
+        const result = await response.json();
+        
+        if (response.ok) {
+            closeFriendProfile();
+            currentFriendId = null;
+            currentFriendInfo = null;
+            document.getElementById('no-chat-selected').style.display = 'flex';
+            document.getElementById('chat-window').style.display = 'none';
+            loadFriends();
+            loadContacts();
+            loadBlacklist();
+            alert('已加入黑名单');
+        } else {
+            alert(result.error || '操作失败');
+        }
+    } catch (error) {
+        console.error('拉黑失败:', error);
+        alert('操作失败，请重试');
+    }
+}
+
+async function loadContacts() {
+    const contactsList = document.getElementById('contacts-list');
+    try {
+        const response = await fetch(`/api/friends/${currentUser.id}`);
+        const friends = await response.json();
+        
+        contactsList.innerHTML = '';
+        
+        if (friends.length === 0) {
+            contactsList.innerHTML = '<p style="text-align: center; color: #999; padding: 20px;">暂无联系人</p>';
+            return;
+        }
+        
+        friends.forEach(friend => {
+            const contactElement = document.createElement('div');
+            contactElement.className = 'contact-item';
+            contactElement.innerHTML = `
+                <span class="contact-item-name">${friend.username}</span>
+                <button class="contact-btn" onclick="selectFriendFromContacts(${friend.id}, '${friend.username}')">发起聊天</button>
+            `;
+            contactsList.appendChild(contactElement);
+        });
+    } catch (error) {
+        console.error('加载通讯录失败:', error);
+        contactsList.innerHTML = '<p style="text-align: center; color: #999; padding: 20px;">加载失败</p>';
+    }
+}
+
+async function selectFriendFromContacts(friendId, username) {
+    switchTab('friends');
+    
+    const friendItem = document.querySelector(`[data-friend-id="${friendId}"]`);
+    if (friendItem) {
+        friendItem.click();
+    } else {
+        const friend = { id: friendId, username: username };
+        await selectFriend(friend);
+    }
+}
+
+async function loadBlacklist() {
+    const blacklistList = document.getElementById('blacklist-list');
+    try {
+        const response = await fetch(`/api/blacklist/${currentUser.id}`);
+        const blacklist = await response.json();
+        
+        blacklistList.innerHTML = '';
+        
+        if (blacklist.length === 0) {
+            blacklistList.innerHTML = '<p style="text-align: center; color: #999; padding: 20px;">黑名单为空</p>';
+            return;
+        }
+        
+        blacklist.forEach(item => {
+            const itemElement = document.createElement('div');
+            itemElement.className = 'blacklist-item';
+            itemElement.innerHTML = `
+                <span class="blacklist-item-name">${item.blocked_user_name}</span>
+                <button class="unblock-btn" onclick="unblockUser(${item.blocked_user_id})">移除</button>
+            `;
+            blacklistList.appendChild(itemElement);
+        });
+    } catch (error) {
+        console.error('加载黑名单失败:', error);
+        blacklistList.innerHTML = '<p style="text-align: center; color: #999; padding: 20px;">加载失败</p>';
+    }
+}
+
+async function unblockUser(blockedUserId) {
+    if (!confirm('确定要移除黑名单吗？')) return;
+    
+    try {
+        const response = await fetch('/api/blacklist/remove', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                user_id: currentUser.id,
+                blocked_user_id: blockedUserId
+            })
+        });
+        
+        const result = await response.json();
+        
+        if (response.ok) {
+            loadBlacklist();
+            alert('已从黑名单移除');
+        } else {
+            alert(result.error || '操作失败');
+        }
+    } catch (error) {
+        console.error('移除黑名单失败:', error);
+        alert('操作失败，请重试');
+    }
+}
+
+function initChat() {
+    document.getElementById('login-container').style.display = 'none';
+    document.getElementById('chat-container').style.display = 'flex';
+    document.getElementById('current-user').textContent = `欢迎, ${currentUser.username}`;
+    
+    updateUserAvatar();
+    
+    socket = io({
+        transports: ['websocket', 'polling'],
+        reconnection: true,
+        reconnectionAttempts: Infinity,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000,
+        timeout: 20000
+    });
+    
+    function updateConnectionStatus(status, text) {
+        const statusElement = document.getElementById('connection-status');
+        if (statusElement) {
+            statusElement.style.color = status;
+            statusElement.textContent = text;
+        }
+    }
+    
+    function showSyncStatus(message, isError = false) {
+        console.log(message);
+    }
+    
+    socket.on('connect', () => {
+        console.log('✅ 已连接到服务器');
+        isConnected = true;
+        updateConnectionStatus('#4CAF50', '● 已连接');
+        showSyncStatus('连接成功，开始同步消息...');
+        socket.emit('join', { user_id: currentUser.id });
+        
+        if (currentFriendId) {
+            loadMessages(currentFriendId);
+        }
+        loadFriends();
+    });
+    
+    socket.on('disconnect', (reason) => {
+        console.log('❌ 与服务器断开连接:', reason);
+        isConnected = false;
+        updateConnectionStatus('#FF5722', '● 已断开');
+        showSyncStatus('连接断开，正在尝试重新连接...', true);
+    });
+    
+    socket.on('reconnect', (attemptNumber) => {
+        console.log('🔄 重连成功');
+        isConnected = true;
+        updateConnectionStatus('#4CAF50', '● 已连接');
+        showSyncStatus('已重连，正在同步...');
+        socket.emit('join', { user_id: currentUser.id });
+        
+        if (currentFriendId) {
+            loadMessages(currentFriendId);
+        }
+        loadFriends();
+    });
+    
+    socket.on('reconnect_attempt', (attemptNumber) => {
+        console.log(`🔄 正在尝试重连... (第${attemptNumber}次)`);
+        updateConnectionStatus('#FFC107', '● 重连中');
+    });
+    
+    socket.on('reconnect_error', (error) => {
+        console.log('❌ 重连失败:', error);
+        showSyncStatus('重连失败，继续尝试...', true);
+    });
+    
+    socket.on('receive_message', (message) => {
+        console.log('📨 收到消息:', message);
+        handleReceivedMessage(message);
+    });
+    
+    socket.on('connect_error', (error) => {
+        console.log('❌ 连接错误:', error);
+        isConnected = false;
+        updateConnectionStatus('#FF5722', '● 连接错误');
+        showSyncStatus('连接错误，请检查网络', true);
+    });
+    
+    loadFriends();
+    loadFriendRequests();
+    
+    setInterval(() => {
+        loadFriendRequests();
+        if (currentFriendId && isConnected) {
+            loadMessages(currentFriendId);
+        }
+    }, 30000);
+    
+    setInterval(() => {
+        if (!isConnected) {
+            showSyncStatus('正在尝试建立连接...', true);
+        }
+    }, 5000);
+}
+
+async function selectFriend(friend) {
+    currentFriendId = friend.id;
+    currentFriendInfo = friend;
+    
+    document.querySelectorAll('.friend-item').forEach(item => {
+        item.classList.remove('active');
+    });
+    if (event && event.currentTarget) {
+        event.currentTarget.classList.add('active');
+    }
+    
+    document.getElementById('no-chat-selected').style.display = 'none';
+    document.getElementById('chat-window').style.display = 'flex';
+    document.getElementById('chat-with-username').textContent = friend.username;
+    document.getElementById('friend-avatar-initial').textContent = getAvatarInitial(friend.username);
+    
+    unreadMessages[friend.id] = 0;
+    loadFriends();
+    
+    loadMessages(friend.id);
+}
+
 window.onload = function() {
     const savedUser = localStorage.getItem('currentUser');
     if (savedUser) {
@@ -630,4 +924,11 @@ window.onload = function() {
     if ('Notification' in window && Notification.permission === 'default') {
         Notification.requestPermission();
     }
+    
+    document.getElementById('profile-modal').addEventListener('click', function(e) {
+        if (e.target === this) closeProfile();
+    });
+    document.getElementById('friend-profile-modal').addEventListener('click', function(e) {
+        if (e.target === this) closeFriendProfile();
+    });
 };
