@@ -8,7 +8,6 @@ import os
 
 app = Flask(__name__)
 
-# 从环境变量读取配置，支持本地和云端部署
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'family-chat-secret-key-2024')
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///family_chat.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -297,7 +296,7 @@ def handle_send_message(data):
         emit('receive_message', message_data, room=str(sender_id))
         
     except Exception as e:
-        print(f"发送消息出错: {e}")
+        print(f'sending message failed: {e}')
         db.session.rollback()
 
 
@@ -307,9 +306,9 @@ if __name__ == '__main__':
     with app.app_context():
         db.create_all()
     
-    print("=" * 50)
-    print("家庭聊天软件正在启动...")
-    print(f"访问地址: http://localhost:{port}")
-    print("=" * 50)
+    print('=' * 50)
+    print('family chat app start...')
+    print(f'access url: http://localhost:{port}')
+    print('=' * 50)
     
     socketio.run(app, host='0.0.0.0', port=port, debug=False, use_reloader=False, allow_unsafe_werkzeug=True)

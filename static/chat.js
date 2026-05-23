@@ -2,6 +2,9 @@ let socket;
 let currentUser = null;
 let currentFriendId = null;
 let receivedMessages = {};
+let isConnected = false;
+let reconnectTimer = null;
+let lastMessageCheckTime = Date.now();
 
 function showRegister() {
     document.getElementById('login-form').style.display = 'none';
@@ -111,6 +114,9 @@ function logout() {
         socket.emit('leave', { user_id: currentUser.id });
         socket.disconnect();
     }
+    if (reconnectTimer) {
+        clearInterval(reconnectTimer);
+    }
     currentUser = null;
     currentFriendId = null;
     receivedMessages = {};
@@ -126,11 +132,13 @@ function initChat() {
     document.getElementById('chat-container').style.display = 'flex';
     document.getElementById('current-user').textContent = `欢迎, ${currentUser.username}`;
     
-    socket = io('http://' + window.location.host, {
+    socket = io({
         transports: ['websocket', 'polling'],
         reconnection: true,
         reconnectionAttempts: Infinity,
-        reconnectionDelay: 1000
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000,
+        timeout: 20000
     });
     
     function updateConnectionStatus(status, text) {
@@ -141,29 +149,71 @@ function initChat() {
         }
     }
     
+    function showSyncStatus(message, isError = false) {
+        const syncElement = document.getElementById('sync-status');
+        if (syncElement) {
+            syncElement.textContent = message;
+            syncElement.style.color = isError ? '#FF5722' : '#4CAF50';
+            syncElement.style.opacity = '1';
+            setTimeout(() => {
+                syncElement.style.opacity = '0.7';
+            }, 2000);
+        }
+    }
+    
     socket.on('connect', () => {
-        console.log('已连接到服务器');
+        console.log('✅ 已连接到服务器');
+        isConnected = true;
         updateConnectionStatus('#4CAF50', '● 已连接');
+        showSyncStatus('连接成功，开始同步消息...');
         socket.emit('join', { user_id: currentUser.id });
+        
+        if (currentFriendId) {
+            loadMessages(currentFriendId);
+        }
+        loadFriends();
     });
     
-    socket.on('disconnect', () => {
-        console.log('与服务器断开连接');
+    socket.on('disconnect', (reason) => {
+        console.log('❌ 与服务器断开连接:', reason);
+        isConnected = false;
         updateConnectionStatus('#FF5722', '● 已断开');
+        showSyncStatus('连接断开，正在尝试重新连接...', true);
     });
     
     socket.on('reconnect', (attemptNumber) => {
-        console.log('重连成功');
+        console.log('🔄 重连成功');
+        isConnected = true;
         updateConnectionStatus('#4CAF50', '● 已连接');
+        showSyncStatus('已重连，正在同步...');
+        socket.emit('join', { user_id: currentUser.id });
+        
+        if (currentFriendId) {
+            loadMessages(currentFriendId);
+        }
+        loadFriends();
     });
     
-    socket.on('reconnect_attempt', () => {
-        console.log('正在尝试重连...');
+    socket.on('reconnect_attempt', (attemptNumber) => {
+        console.log(`🔄 正在尝试重连... (第${attemptNumber}次)`);
         updateConnectionStatus('#FFC107', '● 重连中');
     });
     
+    socket.on('reconnect_error', (error) => {
+        console.log('❌ 重连失败:', error);
+        showSyncStatus('重连失败，继续尝试...', true);
+    });
+    
     socket.on('receive_message', (message) => {
+        console.log('📨 收到消息:', message);
         handleReceivedMessage(message);
+    });
+    
+    socket.on('connect_error', (error) => {
+        console.log('❌ 连接错误:', error);
+        isConnected = false;
+        updateConnectionStatus('#FF5722', '● 连接错误');
+        showSyncStatus('连接错误，请检查网络', true);
     });
     
     loadFriends();
@@ -171,6 +221,15 @@ function initChat() {
     
     setInterval(() => {
         loadFriendRequests();
+        if (currentFriendId && isConnected) {
+            loadMessages(currentFriendId);
+        }
+    }, 30000);
+    
+    setInterval(() => {
+        if (!isConnected) {
+            showSyncStatus('正在尝试建立连接...', true);
+        }
     }, 5000);
 }
 
@@ -193,7 +252,6 @@ async function loadFriends() {
             friendElement.dataset.friendId = friend.id;
             friendElement.onclick = () => selectFriend(friend);
             
-            // 检查未读消息数量
             const unreadCount = unreadMessages[friend.id] || 0;
             const unreadBadge = unreadCount > 0 ? `<span class="unread-badge">${unreadCount > 99 ? '99+' : unreadCount}</span>` : '';
             
@@ -332,6 +390,9 @@ async function sendFriendRequest(receiverId) {
 function refreshFriends() {
     loadFriends();
     loadFriendRequests();
+    if (currentFriendId) {
+        loadMessages(currentFriendId);
+    }
 }
 
 function toggleFriendRequests() {
@@ -351,6 +412,9 @@ async function selectFriend(friend) {
     document.getElementById('chat-window').style.display = 'flex';
     document.getElementById('chat-with-username').textContent = friend.username;
     
+    unreadMessages[friend.id] = 0;
+    loadFriends();
+    
     loadMessages(friend.id);
 }
 
@@ -361,7 +425,7 @@ async function loadMessages(friendId) {
         
         const messagesContainer = document.getElementById('messages-container');
         messagesContainer.innerHTML = '';
-        displayedMessageIds.clear(); // 清除已显示消息集合
+        displayedMessageIds.clear();
         
         messages.forEach(message => {
             displayedMessageIds.add(message.id);
@@ -371,28 +435,28 @@ async function loadMessages(friendId) {
         messagesContainer.scrollTop = messagesContainer.scrollHeight;
     } catch (error) {
         console.error('加载消息失败:', error);
+        const messagesContainer = document.getElementById('messages-container');
+        messagesContainer.innerHTML = '<p style="text-align: center; color: #999; padding: 20px;">加载消息失败，请检查网络连接</p>';
     }
 }
 
 function addMessageToUI(message) {
     const messagesContainer = document.getElementById('messages-container');
     
-    // 检查是否已经有相同ID的消息
     if (message.id && document.querySelector(`[data-message-id="${message.id}"]`)) {
-        return; // 消息已存在，不重复添加
+        return;
     }
     
     const messageElement = document.createElement('div');
     messageElement.className = 'message ' + (message.is_mine ? 'sent' : 'received');
-    // 给消息添加 data-id 属性
     if (message.id) {
         messageElement.dataset.messageId = message.id;
     }
-    // 如果是临时消息，添加标记
     if (message.is_temporary) {
         messageElement.dataset.temporary = 'true';
         messageElement.dataset.tempContent = message.content;
         messageElement.dataset.tempTimestamp = message.timestamp;
+        messageElement.classList.add('sending');
     }
     
     const time = new Date(message.timestamp).toLocaleString('zh-CN', {
@@ -405,21 +469,21 @@ function addMessageToUI(message) {
     messageElement.innerHTML = `
         <div class="message-content">
             <div>${message.content}</div>
-            <div class="message-time">${time}</div>
+            <div class="message-time">${message.is_temporary ? '发送中...' : time}</div>
         </div>
     `;
     
     messagesContainer.appendChild(messageElement);
 }
 
-// 用来避免重复显示的消息ID集合
 const displayedMessageIds = new Set();
-// 未读消息计数
 const unreadMessages = {};
 
 function handleReceivedMessage(message) {
-    // 避免重复显示消息
+    console.log('处理收到的消息:', message);
+    
     if (message.id && displayedMessageIds.has(message.id)) {
+        console.log('消息已显示，跳过:', message.id);
         return;
     }
     
@@ -427,62 +491,56 @@ function handleReceivedMessage(message) {
         displayedMessageIds.add(message.id);
     }
     
-    // 如果是自己的消息，尝试移除对应的临时消息
     if (message.is_mine) {
         const tempMessages = document.querySelectorAll('[data-temporary="true"]');
         for (let temp of tempMessages) {
             if (temp.dataset.tempContent === message.content) {
                 temp.remove();
+                console.log('已移除临时消息');
                 break;
             }
         }
     }
     
-    // 记录未读消息
     if (!message.is_mine) {
         const senderId = message.sender_id;
         if (!unreadMessages[senderId]) {
             unreadMessages[senderId] = 0;
         }
         unreadMessages[senderId]++;
+        console.log('未读消息计数:', unreadMessages);
     }
     
-    // 判断是否应该显示在当前聊天窗口
     const isInCurrentChat = (message.sender_id === currentFriendId || message.receiver_id === currentFriendId);
     
     if (isInCurrentChat) {
-        // 如果在当前聊天窗口，显示消息
         addMessageToUI(message);
         const messagesContainer = document.getElementById('messages-container');
         messagesContainer.scrollTop = messagesContainer.scrollHeight;
         
-        // 如果是收到的消息，清除该好友的未读计数
         if (!message.is_mine) {
             unreadMessages[currentFriendId] = 0;
         }
     } else if (!message.is_mine) {
-        // 不在当前聊天窗口且是收到的消息，显示通知
         showMessageNotification(message);
     }
     
-    // 记录消息
     if (!receivedMessages[message.sender_id]) {
         receivedMessages[message.sender_id] = [];
     }
     receivedMessages[message.sender_id].push(message);
     
-    // 刷新好友列表，更新未读状态
     loadFriends();
 }
 
 function showMessageNotification(message) {
-    // 简单的视觉提示：闪烁好友列表
+    console.log('显示消息通知:', message);
+    
     const friendItems = document.querySelectorAll('.friend-item');
     friendItems.forEach(item => {
         const friendId = parseInt(item.dataset.friendId);
         if (friendId === message.sender_id) {
             item.classList.add('has-unread');
-            // 如果有未读计数，显示它
             const count = unreadMessages[message.sender_id] || 0;
             if (count > 0) {
                 let badge = item.querySelector('.unread-badge');
@@ -496,12 +554,13 @@ function showMessageNotification(message) {
         }
     });
     
-    // 可选：浏览器通知（如果用户授权）
-    if (Notification.permission === 'granted') {
+    if ('Notification' in window && Notification.permission === 'granted') {
         new Notification('新消息', {
             body: message.content.substring(0, 50),
             icon: '/static/icon.png'
         });
+    } else if ('Notification' in window && Notification.permission !== 'denied') {
+        Notification.requestPermission();
     }
 }
 
@@ -513,7 +572,11 @@ function sendMessage() {
         return;
     }
     
-    // 立即在发送方显示消息，优化用户体验
+    if (!isConnected || !socket) {
+        alert('当前未连接到服务器，请稍后再试');
+        return;
+    }
+    
     const temporaryMessage = {
         id: null,
         sender_id: currentUser.id,
@@ -530,16 +593,24 @@ function sendMessage() {
     
     input.value = '';
     
-    // 发送到服务器
+    console.log('发送消息到服务器:', {
+        sender_id: currentUser.id,
+        receiver_id: currentFriendId,
+        content: content
+    });
+    
     try {
         socket.emit('send_message', {
             sender_id: currentUser.id,
             receiver_id: currentFriendId,
             content: content
         });
+        console.log('消息发送请求已发出');
     } catch (error) {
         console.error('发送消息失败:', error);
         alert('发送消息失败，请检查网络连接');
+        const tempMessages = document.querySelectorAll('[data-temporary="true"]');
+        tempMessages.forEach(temp => temp.remove());
     }
 }
 
@@ -554,5 +625,9 @@ window.onload = function() {
     if (savedUser) {
         currentUser = JSON.parse(savedUser);
         initChat();
+    }
+    
+    if ('Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission();
     }
 };

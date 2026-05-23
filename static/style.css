@@ -132,17 +132,14 @@ body {
 }
 
 .user-info {
-    padding: 24px;
+    padding: 20px 24px;
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: white;
     display: flex;
     justify-content: space-between;
-    align-items: center;
-}
-
-.user-info h3 {
-    font-size: 18px;
-    font-weight: 600;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 10px;
 }
 
 .logout-btn {
@@ -379,11 +376,6 @@ body {
     font-size: 18px;
 }
 
-#no-chat-selected svg {
-    margin-bottom: 20px;
-    opacity: 0.5;
-}
-
 #chat-window {
     flex: 1;
     display: flex;
@@ -443,6 +435,10 @@ body {
     border-bottom-left-radius: 6px;
 }
 
+.message.sending .message-content {
+    opacity: 0.6;
+}
+
 .message-time {
     font-size: 11px;
     margin-top: 6px;
@@ -489,7 +485,6 @@ body {
     box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
 }
 
-/* 未读消息样式 */
 .unread-badge {
     display: inline-flex;
     align-items: center;
