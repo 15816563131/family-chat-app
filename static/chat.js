@@ -101,6 +101,16 @@ async function login() {
                 username: data.username
             };
             localStorage.setItem('currentUser', JSON.stringify(currentUser));
+            
+            // 触发登录成功事件，用于请求通知权限
+            try {
+                const loginEvent = new Event('userLoggedIn');
+                window.dispatchEvent(loginEvent);
+                console.log('登录成功事件已触发');
+            } catch (e) {
+                console.log('触发登录事件失败:', e);
+            }
+            
             initChat();
         } else {
             showMessage(data.error || '登录失败');

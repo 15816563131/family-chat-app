@@ -187,31 +187,98 @@
                 .catch(err => console.log('Service Worker 注册失败:', err));
         }
         
-        // 请求通知权限
+        // 请求通知权限 - 更积极主动
         function requestNotificationPermission() {
-            if ('Notification' in window && Notification.permission === 'default') {
-                Notification.requestPermission().then(permission => {
-                    if (permission === 'granted') {
-                        console.log('通知权限已授予');
-                    }
-                });
+            if ('Notification' in window) {
+                if (Notification.permission === 'default') {
+                    console.log('正在请求通知权限...');
+                    Notification.requestPermission().then(permission => {
+                        if (permission === 'granted') {
+                            console.log('✅ 通知权限已授予');
+                            // 立即显示一个测试通知
+                            try {
+                                new Notification('家庭聊天', {
+                                    body: '通知功能已开启！有新消息时会收到提醒。',
+                                    icon: '/static/icon.svg',
+                                    vibrate: [100, 50, 100],
+                                    tag: 'family-chat-welcome'
+                                });
+                            } catch (e) {
+                                console.log('无法显示测试通知:', e);
+                            }
+                        } else if (permission === 'denied') {
+                            console.log('❌ 通知权限被拒绝，请在设置中开启');
+                        }
+                    }).catch(err => {
+                        console.log('权限请求出错:', err);
+                    });
+                } else if (Notification.permission === 'denied') {
+                    console.log('通知权限已被拒绝，请在系统设置中重新开启');
+                }
+            } else {
+                console.log('当前浏览器不支持通知');
             }
         }
         
-        // 显示通知
+        // 显示通知 - 增强版本
         function showNotification(title, body) {
-            if ('Notification' in window && Notification.permission === 'granted') {
-                new Notification(title, {
-                    body: body,
-                    icon: '/static/icon.svg',
-                    vibrate: [100, 50, 100],
-                    tag: 'family-chat'
-                });
+            console.log('尝试显示通知:', title, body);
+            if ('Notification' in window) {
+                if (Notification.permission === 'granted') {
+                    try {
+                        const notification = new Notification(title, {
+                            body: body,
+                            icon: '/static/icon.svg',
+                            badge: '/static/icon.svg',
+                            vibrate: [200, 100, 200],
+                            tag: 'family-chat',
+                            renotify: true,
+                            requireInteraction: false
+                        });
+                        
+                        // 通知点击事件
+                        notification.onclick = function() {
+                            window.focus();
+                            this.close();
+                        };
+                        
+                        console.log('✅ 通知已显示');
+                    } catch (e) {
+                        console.log('❌ 显示通知失败:', e);
+                    }
+                } else if (Notification.permission === 'default') {
+                    console.log('通知权限未设置，重新请求...');
+                    requestNotificationPermission();
+                } else {
+                    console.log('❌ 通知权限被拒绝');
+                }
             }
         }
         
-        // 页面加载时请求权限
-        window.addEventListener('load', requestNotificationPermission);
+        // 多次尝试请求权限 - 在多个时机触发
+        function setupPermissionRequests() {
+            // 页面加载后1秒请求
+            setTimeout(requestNotificationPermission, 1000);
+            
+            // 登录后再次请求
+            window.addEventListener('userLoggedIn', function() {
+                setTimeout(requestNotificationPermission, 500);
+            });
+            
+            // 检测到是Android WebView时更积极请求
+            const isAndroid = /Android/i.test(navigator.userAgent);
+            if (isAndroid) {
+                console.log('检测到Android环境');
+                setTimeout(requestNotificationPermission, 500);
+                setTimeout(requestNotificationPermission, 3000);
+            }
+        }
+        
+        // 页面加载时设置权限请求
+        window.addEventListener('load', function() {
+            console.log('页面加载完成，初始化通知系统');
+            setupPermissionRequests();
+        });
     </script>
 </body>
 </html>
