@@ -223,9 +223,18 @@
             }
         }
         
-        // 显示通知 - 增强版本
+        // 显示通知 - 增强版本（支持Android原生通知）
         function showNotification(title, body) {
             console.log('尝试显示通知:', title, body);
+            
+            // 优先使用Android原生通知（如果在WebView中）
+            if (window.AndroidBridge && typeof window.AndroidBridge.showNotification === 'function') {
+                console.log('📱 使用Android原生通知');
+                window.AndroidBridge.showNotification(title, body);
+                return;
+            }
+            
+            // 降级使用浏览器通知
             if ('Notification' in window) {
                 if (Notification.permission === 'granted') {
                     try {
@@ -245,9 +254,9 @@
                             this.close();
                         };
                         
-                        console.log('✅ 通知已显示');
+                        console.log('✅ 浏览器通知已显示');
                     } catch (e) {
-                        console.log('❌ 显示通知失败:', e);
+                        console.log('❌ 显示浏览器通知失败:', e);
                     }
                 } else if (Notification.permission === 'default') {
                     console.log('通知权限未设置，重新请求...');
@@ -255,6 +264,8 @@
                 } else {
                     console.log('❌ 通知权限被拒绝');
                 }
+            } else {
+                console.log('❌ 当前环境不支持通知');
             }
         }
         

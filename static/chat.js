@@ -935,12 +935,31 @@ async function selectFriend(friend) {
     loadMessages(friend.id);
 }
 
+// 检测是否在Android WebView中
+function isAndroidWebView() {
+    const ua = navigator.userAgent.toLowerCase();
+    return ua.indexOf('wv') >= 0 || window.AndroidBridge !== undefined;
+}
+
 // 通知测试功能
 function testNotification() {
     console.log('🧪 正在测试通知功能...');
     
+    // 检查是否在WebView中
+    if (isAndroidWebView()) {
+        console.log('📱 检测到Android WebView环境');
+    }
+    
+    // 优先使用Android原生通知
+    if (window.AndroidBridge && typeof window.AndroidBridge.showNotification === 'function') {
+        console.log('📱 使用Android原生通知测试');
+        window.AndroidBridge.showNotification('家庭聊天 - 测试通知', '✅ Android原生通知正常工作！');
+        alert('✅ 已发出Android原生通知，请检查通知栏！');
+        return;
+    }
+    
     if (!('Notification' in window)) {
-        alert('您的浏览器不支持通知功能');
+        showBrowserCompatibilityTip();
         return;
     }
     
@@ -960,9 +979,10 @@ function testNotification() {
             };
             
             console.log('✅ 测试通知已发出');
+            alert('✅ 测试通知已发出，请检查通知栏！');
         } catch (e) {
             console.error('❌ 显示测试通知失败:', e);
-            alert('无法显示通知，请检查权限');
+            alert('无法显示通知，请检查权限或尝试使用其他浏览器');
         }
     } else if (Notification.permission === 'default') {
         // 权限未设置，请求权限
@@ -971,13 +991,55 @@ function testNotification() {
             if (permission === 'granted') {
                 alert('✅ 通知权限已开启！再次点击测试通知按钮测试');
             } else {
-                alert('⚠️ 通知权限未授予，请在设置中开启');
+                showPermissionHelpTip();
             }
         });
     } else {
         // 权限被拒绝
-        alert('❌ 通知权限被拒绝，请在浏览器/系统设置中开启');
+        showPermissionHelpTip();
     }
+}
+
+// 显示浏览器兼容性提示
+function showBrowserCompatibilityTip() {
+    const browserTip = `
+⚠️ 您的浏览器不支持通知功能！
+
+📱 建议解决方案：
+
+方案一（推荐）：
+使用我们的Android APP
+- 自动处理通知权限
+- 功能更完整
+
+方案二：
+更换浏览器（推荐）：
+• Chrome 浏览器
+• Edge 浏览器
+• Firefox 浏览器
+
+方案三：
+继续使用，聊天功能仍然正常
+只是无法收到后台通知
+`;
+    alert(browserTip);
+}
+
+// 显示权限帮助提示
+function showPermissionHelpTip() {
+    const helpTip = `
+🔔 通知权限设置帮助
+
+在系统设置中开启：
+1. 打开手机"设置"
+2. 找到"应用"或"应用管理"
+3. 找到当前APP/浏览器
+4. 打开"通知权限"
+5. 允许显示通知
+
+开启后刷新页面重试！
+`;
+    alert(helpTip);
 }
 
 // 检查并显示通知权限状态
