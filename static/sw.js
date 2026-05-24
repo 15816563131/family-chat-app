@@ -1,4 +1,4 @@
-const CACHE_NAME = 'family-chat-v1';
+const CACHE_NAME = 'family-chat-v4';
 const urlsToCache = [
   '/',
   '/static/style.css',
