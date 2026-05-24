@@ -364,9 +364,14 @@ function addMessageToUI(message) {
         minute: '2-digit'
     });
     
+    const avatarText = (message.sender_name || 'U').charAt(0).toUpperCase();
+    
     messageElement.innerHTML = `
-        <div class="message-content">
-            <div>${message.content}</div>
+        <div class="message-avatar">${avatarText}</div>
+        <div class="message-content-wrapper">
+            <div class="message-content">
+                ${message.content}
+            </div>
             <div class="message-time">${message.is_temporary ? '发送中...' : time}</div>
         </div>
     `;
@@ -461,7 +466,7 @@ function showMessageNotification(message) {
     if ('Notification' in window && Notification.permission === 'granted') {
         new Notification('新消息', {
             body: message.content.substring(0, 50),
-            icon: '/static/icon.png'
+            icon: '/static/icon.svg'
         });
     } else if ('Notification' in window && Notification.permission !== 'denied') {
         Notification.requestPermission();
