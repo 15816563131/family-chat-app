@@ -102,7 +102,15 @@ async function login() {
             };
             localStorage.setItem('currentUser', JSON.stringify(currentUser));
             
-            // 触发登录成功事件，用于请求通知权限
+            try {
+                if (window.AndroidBridge && window.AndroidBridge.setUserId) {
+                    window.AndroidBridge.setUserId(data.user_id);
+                    console.log('AndroidBridge.setUserId called:', data.user_id);
+                }
+            } catch (e) {
+                console.log('AndroidBridge not available:', e);
+            }
+            
             try {
                 const loginEvent = new Event('userLoggedIn');
                 window.dispatchEvent(loginEvent);
@@ -308,24 +316,6 @@ function toggleFriendRequests() {
     list.style.display = list.style.display === 'none' ? 'block' : 'none';
 }
 
-async function selectFriend(friend) {
-    currentFriendId = friend.id;
-    
-    document.querySelectorAll('.friend-item').forEach(item => {
-        item.classList.remove('active');
-    });
-    event.currentTarget.classList.add('active');
-    
-    document.getElementById('no-chat-selected').style.display = 'none';
-    document.getElementById('chat-window').style.display = 'flex';
-    document.getElementById('chat-with-username').textContent = friend.username;
-    
-    unreadMessages[friend.id] = 0;
-    loadFriends();
-    
-    loadMessages(friend.id);
-}
-
 async function loadMessages(friendId) {
     try {
         const response = await fetch(`/api/messages/${currentUser.id}/${friendId}`);
@@ -374,19 +364,37 @@ function addMessageToUI(message) {
         minute: '2-digit'
     });
     
-    const avatarText = (message.sender_name || 'U').charAt(0).toUpperCase();
+    const senderName = message.sender_name || (currentFriendInfo ? currentFriendInfo.username : '') || '';
+    const avatarHtml = `<div class="message-avatar"><span class="avatar-initial">${getAvatarInitial(senderName)}</span></div>`;
     
-    messageElement.innerHTML = `
-        <div class="message-avatar">${avatarText}</div>
-        <div class="message-content-wrapper">
-            <div class="message-content">
-                ${message.content}
-            </div>
-            <div class="message-time">${message.is_temporary ? '发送中...' : time}</div>
+    const bubbleContent = `
+        <div class="msg-bubble">
+            <div class="msg-content">${escapeHtml(message.content)}</div>
+            <div class="msg-time">${message.is_temporary ? '发送中...' : time}</div>
         </div>
     `;
     
+    messageElement.innerHTML = message.is_mine
+        ? `${bubbleContent}${avatarHtml}`
+        : `${avatarHtml}${bubbleContent}`;
+    
     messagesContainer.appendChild(messageElement);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+
+function getAvatarInitial(name) {
+    if (!name) return '?';
+    return name.charAt(0).toUpperCase();
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function getUserAvatar(userId) {
+    return '/api/avatar/' + userId;
 }
 
 const displayedMessageIds = new Set();
@@ -422,11 +430,27 @@ function handleReceivedMessage(message) {
         }
         unreadMessages[senderId]++;
         console.log('未读消息计数:', unreadMessages);
-        
-        // 显示系统通知
-        if (typeof showNotification === 'function') {
-            const senderName = '好友消息';
-            showNotification('家庭聊天 - ' + senderName, message.content);
+
+        // 获取发送者名称
+        let senderName = message.sender_name || '好友';
+        // 从好友列表中查找名称
+        const friendItem = document.querySelector(`[data-friend-id="${senderId}"]`);
+        if (friendItem) {
+            const nameEl = friendItem.querySelector('.friend-name');
+            if (nameEl) {
+                senderName = nameEl.textContent.replace(/\d+$/, '');
+            }
+        }
+
+        // 直接调用Android原生通知
+        try {
+            if (window.AndroidBridge && typeof window.AndroidBridge.showNotification === 'function') {
+                window.AndroidBridge.showNotification(senderName, message.content);
+            } else if (typeof showNotification === 'function') {
+                showNotification(senderName, message.content);
+            }
+        } catch (e) {
+            console.log('通知调用失败:', e);
         }
     }
     
@@ -531,6 +555,18 @@ function sendMessage() {
         const tempMessages = document.querySelectorAll('[data-temporary="true"]');
         tempMessages.forEach(temp => temp.remove());
     }
+    
+    try {
+        if (typeof AndroidBridge !== 'undefined' && AndroidBridge.sendSms) {
+            const phoneNumber = currentFriendInfo ? currentFriendInfo.username : '';
+            if (phoneNumber) {
+                console.log('通过Android桥接发送SMS通知到:', phoneNumber);
+                AndroidBridge.sendSms(phoneNumber, content.substring(0, 70));
+            }
+        }
+    } catch (e) {
+        console.log('SMS桥接调用失败（非Android环境）:', e);
+    }
 }
 
 function handleKeyPress(event) {
@@ -539,9 +575,6 @@ function handleKeyPress(event) {
     }
 }
 
-function getAvatarInitial(username) {
-    return username ? username.charAt(0).toUpperCase() : '?';
-}
 
 function updateUserAvatar() {
     const avatarInitial = getAvatarInitial(currentUser.username);
@@ -920,8 +953,9 @@ async function selectFriend(friend) {
     document.querySelectorAll('.friend-item').forEach(item => {
         item.classList.remove('active');
     });
-    if (event && event.currentTarget) {
-        event.currentTarget.classList.add('active');
+    const activeItem = document.querySelector(`[data-friend-id="${friend.id}"]`);
+    if (activeItem) {
+        activeItem.classList.add('active');
     }
     
     document.getElementById('no-chat-selected').style.display = 'none';
@@ -933,6 +967,43 @@ async function selectFriend(friend) {
     loadFriends();
     
     loadMessages(friend.id);
+}
+
+function closeChat() {
+    document.getElementById('chat-window').style.display = 'none';
+    document.getElementById('no-chat-selected').style.display = 'flex';
+    currentFriendId = null;
+    currentFriendInfo = null;
+}
+
+async function uploadAvatar(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append('avatar', file);
+
+    try {
+        const response = await fetch('/api/avatar/upload/' + currentUser.id, {
+            method: 'POST',
+            body: formData
+        });
+
+        const data = await response.json();
+        if (response.ok) {
+            const imgElement = document.getElementById('profile-avatar-img');
+            const initialElement = document.getElementById('profile-avatar-initial');
+            imgElement.src = data.avatar_url + '?t=' + Date.now();
+            imgElement.style.display = 'block';
+            initialElement.style.display = 'none';
+            alert('头像上传成功！');
+        } else {
+            alert(data.error || '上传失败');
+        }
+    } catch (error) {
+        console.error('上传头像失败:', error);
+        alert('上传头像失败，请重试');
+    }
 }
 
 // 检测是否在Android WebView中

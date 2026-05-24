@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>家庭聊天 - v1.5.0</title>
+    <title>家庭聊天 - v1.2.0</title>
     <link rel="stylesheet" href="/static/style.css">
     <link rel="manifest" href="/static/manifest.json">
     <meta name="theme-color" content="#07c160">
@@ -16,7 +16,7 @@
         <div id="login-container">
             <div class="auth-box">
                 <h2>🌈 家庭聊天</h2>
-                <div class="version-badge">v1.5.0</div>
+                <div class="version-badge">v1.2.0</div>
                 <div id="login-form">
                     <input type="text" id="login-username" placeholder="👤 用户名">
                     <input type="password" id="login-password" placeholder="🔒 密码">
@@ -105,8 +105,9 @@
                 </div>
                 <div id="chat-window" style="display: none;">
                     <div class="chat-header">
+                        <button class="back-btn" onclick="closeChat()">‹</button>
                         <div class="chat-header-info">
-                            <div class="friend-avatar" id="friend-avatar">
+                            <div class="friend-avatar" id="friend-avatar" onclick="openFriendProfile()">
                                 <span id="friend-avatar-initial">?</span>
                             </div>
                             <div>
@@ -134,9 +135,12 @@
                 <button class="close-btn" onclick="closeProfile()">×</button>
             </div>
             <div class="modal-body">
-                <div class="profile-avatar">
+                <div class="profile-avatar" onclick="document.getElementById('avatar-upload').click()">
+                    <img id="profile-avatar-img" src="" style="display:none;width:80px;height:80px;border-radius:50%;object-fit:cover;">
                     <span id="profile-avatar-initial">?</span>
+                    <div class="avatar-overlay">📷</div>
                 </div>
+                <input type="file" id="avatar-upload" accept="image/*" style="display:none" onchange="uploadAvatar(event)">
                 <div class="profile-field">
                     <label>用户名</label>
                     <input type="text" id="profile-username" placeholder="用户名">

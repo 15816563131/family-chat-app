@@ -4,20 +4,23 @@ import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.provider.Settings;
+import android.telephony.SmsManager;
 import android.util.Log;
+import android.view.View;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
@@ -32,20 +35,32 @@ import androidx.core.content.ContextCompat;
 
 public class MainActivity extends Activity {
     private WebView webView;
+    private MessagePollService pollService;
+    private PowerManager.WakeLock wakeLock;
+    private Handler keepAliveHandler;
+    private Runnable keepAliveRunnable;
+    private boolean isForeground = true;
     private static final String WEB_URL = "https://family-chat-app-production-93b6.up.railway.app";
     private static final int NOTIFICATION_PERMISSION_CODE = 1001;
     private static final int POST_NOTIFICATIONS_REQUEST_CODE = 1002;
+    private static final int SMS_PERMISSION_REQUEST_CODE = 1003;
+    private static final int BATTERY_OPTIMIZATION_REQUEST_CODE = 1004;
+    private static final int OVERLAY_PERMISSION_REQUEST_CODE = 1005;
     private static final String CHANNEL_ID = "family_chat_channel";
+    private static final String FOREGROUND_CHANNEL_ID = "family_chat_foreground";
     private static final String TAG = "FamilyChat";
     private int notificationId = 1;
 
-    @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
+    @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface", "WakelockTimeout"})
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
+        pollService = new MessagePollService(this);
+
         createNotificationChannel();
+        createForegroundChannel();
 
         webView = findViewById(R.id.webView);
 
@@ -57,18 +72,18 @@ public class MainActivity extends Activity {
         webSettings.setAllowContentAccess(true);
         webSettings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         webSettings.setGeolocationEnabled(true);
-        
-        // 启用更多WebView功能以支持通知
+        webSettings.setLoadWithOverviewMode(true);
+        webSettings.setUseWideViewPort(true);
+        webSettings.setLayoutAlgorithm(WebSettings.LayoutAlgorithm.NARROW_COLUMNS);
+        webSettings.setRenderPriority(WebSettings.RenderPriority.HIGH);
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
             webSettings.setAllowUniversalAccessFromFileURLs(true);
         }
-        
-        // 添加JavaScript接口，用于Android原生通知
+
         webView.addJavascriptInterface(new WebAppInterface(), "AndroidBridge");
 
-        webView.setWebChromeClient(new WebChromeClient() {
-            // 可以在这里处理更多WebView通知相关的功能
-        });
+        webView.setWebChromeClient(new WebChromeClient());
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
@@ -84,31 +99,96 @@ public class MainActivity extends Activity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
-                Log.d(TAG, "页面加载完成: " + url);
-                // 页面加载完成后请求通知权限
+                Log.d(TAG, "Page loaded: " + url);
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     requestNotificationPermissionDelayed();
                 }
+                view.resumeTimers();
             }
         });
 
         webView.loadUrl(WEB_URL);
 
-        // 首次启动时请求权限
+        PowerManager powerManager = (PowerManager) getSystemService(POWER_SERVICE);
+        if (powerManager != null) {
+            wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "FamilyChat:WebViewKeepAlive");
+            wakeLock.acquire();
+            Log.d(TAG, "WakeLock acquired");
+        }
+
+        startKeepAlive();
+
         requestNotificationPermission();
+        requestAllPermissions();
 
         new Handler(Looper.getMainLooper()).postDelayed(() -> {
             if (!WEB_URL.equals(webView.getUrl())) {
-                showConnectionErrorDialog();
+                if (webView.getUrl() == null || webView.getUrl().equals("about:blank")) {
+                    showConnectionErrorDialog();
+                }
             }
-        }, 10000);
+        }, 15000);
     }
 
-    // JavaScript接口类
+    private void startKeepAlive() {
+        keepAliveHandler = new Handler(Looper.getMainLooper());
+        keepAliveRunnable = new Runnable() {
+            @Override
+            public void run() {
+                if (webView != null) {
+                    try {
+                        webView.resumeTimers();
+                        Log.d(TAG, "KeepAlive: WebView timers resumed");
+                    } catch (Exception e) {
+                        Log.w(TAG, "KeepAlive error", e);
+                    }
+                }
+                keepAliveHandler.postDelayed(this, 30000);
+            }
+        };
+        keepAliveHandler.postDelayed(keepAliveRunnable, 30000);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        isForeground = true;
+        if (webView != null) {
+            webView.onResume();
+            webView.resumeTimers();
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        isForeground = false;
+        if (webView != null) {
+            webView.onPause();
+            webView.resumeTimers();
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (pollService != null) {
+            pollService.stopPolling();
+        }
+        if (keepAliveHandler != null && keepAliveRunnable != null) {
+            keepAliveHandler.removeCallbacks(keepAliveRunnable);
+        }
+        if (wakeLock != null && wakeLock.isHeld()) {
+            wakeLock.release();
+            Log.d(TAG, "WakeLock released");
+        }
+        Log.d(TAG, "Activity destroyed");
+    }
+
     public class WebAppInterface {
         @JavascriptInterface
         public void showNotification(String title, String body) {
-            Log.d(TAG, "收到JavaScript通知请求: " + title);
+            Log.d(TAG, "JS notification: " + title);
             showAndroidNotification(title, body);
         }
 
@@ -121,26 +201,70 @@ public class MainActivity extends Activity {
         public void requestAndroidNotificationPermission() {
             runOnUiThread(() -> requestNotificationPermission());
         }
+
+        @JavascriptInterface
+        public void sendSms(String phoneNumber, String message) {
+            Log.d(TAG, "Sending SMS to: " + phoneNumber);
+            sendSmsMessage(phoneNumber, message);
+        }
+
+        @JavascriptInterface
+        public boolean hasSmsPermission() {
+            return checkSmsPermission();
+        }
+
+        @JavascriptInterface
+        public void requestSmsPermission() {
+            runOnUiThread(() -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    ActivityCompat.requestPermissions(MainActivity.this,
+                            new String[]{Manifest.permission.SEND_SMS},
+                            SMS_PERMISSION_REQUEST_CODE);
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public void setUserId(int userId) {
+            Log.d(TAG, "User ID from JS: " + userId);
+            if (pollService != null) {
+                pollService.setUserId(userId);
+            }
+        }
     }
 
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            String channelId = CHANNEL_ID;
-            String channelName = "家庭聊天通知";
-            String channelDescription = "接收新消息通知";
-            int importance = NotificationManager.IMPORTANCE_HIGH;
-            
-            NotificationChannel channel = new NotificationChannel(channelId, channelName, importance);
-            channel.setDescription(channelDescription);
+            NotificationManager notificationManager = getSystemService(NotificationManager.class);
+            if (notificationManager != null) {
+                notificationManager.deleteNotificationChannel(CHANNEL_ID);
+            }
+            NotificationChannel channel = new NotificationChannel(
+                    CHANNEL_ID, "Chat Notifications", NotificationManager.IMPORTANCE_HIGH);
+            channel.setDescription("New message notifications");
             channel.enableVibration(true);
             channel.enableLights(true);
             channel.setVibrationPattern(new long[]{100, 200, 100, 200});
             channel.setShowBadge(true);
-            
+            channel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+            channel.setBypassDnd(true);
+            if (notificationManager != null) {
+                notificationManager.createNotificationChannel(channel);
+                Log.d(TAG, "Notification channel created with HIGH importance");
+            }
+        }
+    }
+
+    private void createForegroundChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel channel = new NotificationChannel(
+                    FOREGROUND_CHANNEL_ID, "Background Service",
+                    NotificationManager.IMPORTANCE_LOW);
+            channel.setDescription("Keeps the app running in background");
+            channel.setShowBadge(false);
             NotificationManager notificationManager = getSystemService(NotificationManager.class);
             if (notificationManager != null) {
                 notificationManager.createNotificationChannel(channel);
-                Log.d(TAG, "通知通道已创建");
             }
         }
     }
@@ -150,8 +274,12 @@ public class MainActivity extends Activity {
             return ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
                     == PackageManager.PERMISSION_GRANTED;
         }
-        // Android 13以下默认有通知权限
         return true;
+    }
+
+    private boolean checkSmsPermission() {
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS)
+                == PackageManager.PERMISSION_GRANTED;
     }
 
     private void requestNotificationPermissionDelayed() {
@@ -160,14 +288,12 @@ public class MainActivity extends Activity {
 
     private void requestNotificationPermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            // Android 13+ 需要动态请求通知权限
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
                     != PackageManager.PERMISSION_GRANTED) {
-                if (ActivityCompat.shouldShowRequestPermissionRationale(this, Manifest.permission.POST_NOTIFICATIONS)) {
-                    // 显示权限说明
+                if (ActivityCompat.shouldShowRequestPermissionRationale(this,
+                        Manifest.permission.POST_NOTIFICATIONS)) {
                     showPermissionRationaleDialog();
                 } else {
-                    // 直接请求权限
                     ActivityCompat.requestPermissions(this,
                             new String[]{Manifest.permission.POST_NOTIFICATIONS},
                             POST_NOTIFICATIONS_REQUEST_CODE);
@@ -176,20 +302,147 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void requestAllPermissions() {
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            requestSmsPermission();
+            requestBatteryOptimizationPermission();
+            requestOverlayPermission();
+            requestAutoStartPermission();
+            startForegroundService();
+        }, 2000);
+    }
+
+    private void requestSmsPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS)
+                    != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(this,
+                        new String[]{Manifest.permission.SEND_SMS},
+                        SMS_PERMISSION_REQUEST_CODE);
+            }
+        }
+    }
+
+    private void requestBatteryOptimizationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            Intent intent = new Intent();
+            intent.setAction(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+            intent.setData(Uri.parse("package:" + getPackageName()));
+            if (intent.resolveActivity(getPackageManager()) != null) {
+                startActivityForResult(intent, BATTERY_OPTIMIZATION_REQUEST_CODE);
+            }
+        }
+    }
+
+    private void requestOverlayPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (!Settings.canDrawOverlays(this)) {
+                Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:" + getPackageName()));
+                startActivityForResult(intent, OVERLAY_PERMISSION_REQUEST_CODE);
+            }
+        }
+    }
+
+    private void requestAutoStartPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                Intent intent = new Intent();
+                String manufacturer = Build.MANUFACTURER.toLowerCase();
+                if (manufacturer.contains("xiaomi")) {
+                    intent.setAction("miui.intent.action.OP_AUTO_START");
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                } else if (manufacturer.contains("huawei") || manufacturer.contains("honor")) {
+                    intent.setClassName("com.huawei.systemmanager",
+                            "com.huawei.systemmanager.optimize.process.ProtectActivity");
+                } else if (manufacturer.contains("oppo")) {
+                    intent.setClassName("com.coloros.safecenter",
+                            "com.coloros.safecenter.permission.startup.StartupAppListActivity");
+                } else if (manufacturer.contains("vivo")) {
+                    intent.setClassName("com.vivo.permissionmanager",
+                            "com.vivo.permissionmanager.activity.BrightActivity");
+                } else if (manufacturer.contains("oneplus")) {
+                    intent.setClassName("com.oneplus.security",
+                            "com.oneplus.security.chainlaunch.view.ChainLaunchAppListActivity");
+                } else if (manufacturer.contains("samsung")) {
+                    intent.setClassName("com.samsung.android.sm",
+                            "com.samsung.android.sm.app.battery.BatteryUsageActivity");
+                }
+                if (intent.getComponent() != null && intent.resolveActivity(getPackageManager()) != null) {
+                    startActivity(intent);
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Auto-start permission intent failed", e);
+            }
+        }
+    }
+
+    private void startForegroundService() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Intent serviceIntent = new Intent(this, ForegroundService.class);
+            ContextCompat.startForegroundService(this, serviceIntent);
+        } else {
+            Intent serviceIntent = new Intent(this, ForegroundService.class);
+            startService(serviceIntent);
+        }
+    }
+
+    private void sendSmsMessage(String phoneNumber, String message) {
+        if (!checkSmsPermission()) {
+            Log.w(TAG, "No SMS permission");
+            runOnUiThread(() -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    if (ActivityCompat.shouldShowRequestPermissionRationale(this,
+                            Manifest.permission.SEND_SMS)) {
+                        showSmsPermissionDialog();
+                    } else {
+                        ActivityCompat.requestPermissions(this,
+                                new String[]{Manifest.permission.SEND_SMS},
+                                SMS_PERMISSION_REQUEST_CODE);
+                    }
+                }
+            });
+            return;
+        }
+        try {
+            SmsManager smsManager = SmsManager.getDefault();
+            smsManager.sendTextMessage(phoneNumber, null, message, null, null);
+            Log.d(TAG, "SMS sent to: " + phoneNumber);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to send SMS", e);
+        }
+    }
+
     private void showPermissionRationaleDialog() {
         new AlertDialog.Builder(this)
-                .setTitle("开启通知")
-                .setMessage("为了能及时收到新消息提醒，请开启通知权限。")
-                .setPositiveButton("去开启", (dialog, which) -> {
+                .setTitle("Enable Notifications")
+                .setMessage("Please enable notifications to receive new message alerts.")
+                .setPositiveButton("Go to Settings", (dialog, which) -> {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                         ActivityCompat.requestPermissions(MainActivity.this,
                                 new String[]{Manifest.permission.POST_NOTIFICATIONS},
                                 POST_NOTIFICATIONS_REQUEST_CODE);
                     }
                 })
-                .setNegativeButton("稍后", (dialog, which) -> {
-                    Toast.makeText(MainActivity.this, "您可以在设置中随时开启通知", Toast.LENGTH_SHORT).show();
+                .setNegativeButton("Later", (dialog, which) -> {
+                    Toast.makeText(MainActivity.this,
+                            "You can enable notifications in Settings later", Toast.LENGTH_SHORT).show();
                 })
+                .show();
+    }
+
+    private void showSmsPermissionDialog() {
+        new AlertDialog.Builder(this)
+                .setTitle("Enable SMS")
+                .setMessage("SMS permission is needed so your contacts receive SMS notifications when you message them.")
+                .setPositiveButton("Go to Settings", (dialog, which) -> {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        ActivityCompat.requestPermissions(MainActivity.this,
+                                new String[]{Manifest.permission.SEND_SMS},
+                                SMS_PERMISSION_REQUEST_CODE);
+                    }
+                })
+                .setNegativeButton("Later", null)
                 .show();
     }
 
@@ -198,80 +451,84 @@ public class MainActivity extends Activity {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == POST_NOTIFICATIONS_REQUEST_CODE) {
             if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                Toast.makeText(this, "✅ 通知权限已开启！", Toast.LENGTH_SHORT).show();
-                Log.d(TAG, "通知权限已授权");
+                Toast.makeText(this, "Notifications enabled!", Toast.LENGTH_SHORT).show();
             } else {
-                // 权限被拒绝
-                if (!ActivityCompat.shouldShowRequestPermissionRationale(this, Manifest.permission.POST_NOTIFICATIONS)) {
-                    // 用户勾选了"不再询问"，引导用户去设置页面
-                    showGoToSettingsDialog();
+                if (!ActivityCompat.shouldShowRequestPermissionRationale(this,
+                        Manifest.permission.POST_NOTIFICATIONS)) {
+                    showGoToSettingsDialog("Notification Permission Needed",
+                            "Please enable notifications in Settings to receive message alerts.");
+                }
+            }
+        } else if (requestCode == SMS_PERMISSION_REQUEST_CODE) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                Toast.makeText(this, "SMS permission enabled!", Toast.LENGTH_SHORT).show();
+            } else {
+                if (!ActivityCompat.shouldShowRequestPermissionRationale(this,
+                        Manifest.permission.SEND_SMS)) {
+                    showGoToSettingsDialog("SMS Permission Needed",
+                            "Please enable SMS permission in Settings so your contacts receive SMS notifications.");
                 }
             }
         }
     }
 
-    private void showGoToSettingsDialog() {
+    private void showGoToSettingsDialog(String title, String message) {
         new AlertDialog.Builder(this)
-                .setTitle("需要通知权限")
-                .setMessage("请在设置中开启通知权限，以便接收新消息提醒。")
-                .setPositiveButton("去设置", (dialog, which) -> {
+                .setTitle(title)
+                .setMessage(message)
+                .setPositiveButton("Go to Settings", (dialog, which) -> {
                     Intent intent = new Intent();
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        intent.setAction(Settings.ACTION_APP_NOTIFICATION_SETTINGS);
-                        intent.putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName());
-                    } else {
-                        intent.setAction(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
-                        intent.setData(Uri.fromParts("package", getPackageName(), null));
-                    }
+                    intent.setAction(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+                    intent.setData(Uri.fromParts("package", getPackageName(), null));
                     startActivity(intent);
                 })
-                .setNegativeButton("取消", null)
+                .setNegativeButton("Cancel", null)
                 .show();
     }
 
-    // 使用Android原生通知系统显示通知
     private void showAndroidNotification(String title, String body) {
         if (!checkNotificationPermission()) {
-            Log.w(TAG, "没有通知权限");
+            Log.w(TAG, "No notification permission");
             requestNotificationPermission();
             return;
         }
-
         try {
-            // 创建点击通知时打开的Intent
             Intent intent = new Intent(this, MainActivity.class);
-            intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+            intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
             PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, intent,
                     PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
 
-            // 创建通知
             NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
-                    .setSmallIcon(android.R.drawable.ic_dialog_info)
+                    .setSmallIcon(android.R.drawable.ic_popup_reminder)
                     .setContentTitle(title)
                     .setContentText(body)
+                    .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
                     .setPriority(NotificationCompat.PRIORITY_HIGH)
+                    .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                    .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                     .setContentIntent(pendingIntent)
                     .setAutoCancel(true)
-                    .setVibrate(new long[]{100, 200, 100, 200});
+                    .setDefaults(NotificationCompat.DEFAULT_ALL);
 
-            // 显示通知
             NotificationManagerCompat notificationManager = NotificationManagerCompat.from(this);
             notificationManager.notify(notificationId++, builder.build());
-            Log.d(TAG, "Android原生通知已显示");
+            Log.d(TAG, "Android notification shown: " + title);
         } catch (Exception e) {
-            Log.e(TAG, "显示通知失败", e);
+            Log.e(TAG, "Failed to show notification", e);
         }
     }
 
     private void showConnectionErrorDialog() {
-        new AlertDialog.Builder(this)
-                .setTitle("连接失败")
-                .setMessage("无法连接到服务器，请检查网络连接。\n\n点击\"重试\"重新加载页面。")
-                .setPositiveButton("重试", (dialog, which) -> {
-                    webView.loadUrl(WEB_URL);
-                })
-                .setNegativeButton("取消", null)
-                .show();
+        runOnUiThread(() -> {
+            new AlertDialog.Builder(this)
+                    .setTitle("Connection Failed")
+                    .setMessage("Cannot connect to server. Check your network.\n\nTap Retry to reload.")
+                    .setPositiveButton("Retry", (dialog, which) -> {
+                        webView.loadUrl(WEB_URL);
+                    })
+                    .setNegativeButton("Cancel", null)
+                    .show();
+        });
     }
 
     @Override

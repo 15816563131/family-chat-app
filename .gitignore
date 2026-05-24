@@ -69,3 +69,18 @@ debug.log
 *.exe
 *.msi
 *.dmg
+
+# APK构建文件
+*.apk
+android-sdk/
+build-apk.js
+download-android-studio.ps1
+*.bat
+
+# Android构建缓存
+family-chat-android/android/.gradle/
+family-chat-android/android/app/build/
+family-chat-android/android/local.properties
+
+# 上传的头像文件
+static/uploads/

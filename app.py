@@ -11,6 +11,10 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'family-chat-secret-key-2024')
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///family_chat.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'uploads')
+app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024  # 5MB
+
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 CORS(app, supports_credentials=True)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
@@ -87,6 +91,50 @@ def manifest():
 @app.route('/static/sw.js')
 def service_worker():
     return send_file('static/sw.js', mimetype='application/javascript')
+
+
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+@app.route('/api/avatar/upload/<int:user_id>', methods=['POST'])
+def upload_avatar(user_id):
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'error': '用户不存在'}), 404
+    
+    if 'avatar' not in request.files:
+        return jsonify({'error': '没有上传文件'}), 400
+    
+    file = request.files['avatar']
+    if file.filename == '':
+        return jsonify({'error': '未选择文件'}), 400
+    
+    if not allowed_file(file.filename):
+        return jsonify({'error': '不支持的图片格式'}), 400
+    
+    ext = file.filename.rsplit('.', 1)[1].lower()
+    filename = f'avatar_{user_id}_{int(datetime.utcnow().timestamp())}.{ext}'
+    filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    file.save(filepath)
+    
+    avatar_url = f'/static/uploads/{filename}'
+    user.avatar = avatar_url
+    db.session.commit()
+    
+    return jsonify({'message': '头像上传成功', 'avatar_url': avatar_url}), 200
+
+
+@app.route('/api/avatar/<int:user_id>')
+def get_avatar(user_id):
+    user = User.query.get(user_id)
+    if user and user.avatar:
+        avatar_path = os.path.join(app.config['UPLOAD_FOLDER'], os.path.basename(user.avatar))
+        if os.path.exists(avatar_path):
+            return send_file(avatar_path, mimetype='image/jpeg')
+    return '', 204
 
 
 @app.route('/api/register', methods=['POST'])
@@ -392,15 +440,42 @@ def get_messages(user_id, friend_id):
     
     result = []
     for msg in messages:
+        sender = User.query.get(msg.sender_id)
         result.append({
             'id': msg.id,
             'sender_id': msg.sender_id,
             'receiver_id': msg.receiver_id,
+            'sender_name': sender.username if sender else 'Unknown',
             'content': msg.content,
             'timestamp': msg.timestamp.isoformat(),
             'is_mine': msg.sender_id == user_id
         })
     
+    return jsonify(result)
+
+
+@app.route('/api/recent_messages/<int:user_id>', methods=['GET'])
+def get_recent_messages(user_id):
+    since = request.args.get('since', type=float, default=0)
+    if since > 0:
+        since_date = datetime.fromtimestamp(since / 1000)
+        messages = Message.query.filter(
+            Message.receiver_id == user_id,
+            Message.timestamp > since_date
+        ).order_by(Message.timestamp.asc()).all()
+    else:
+        messages = []
+    
+    result = []
+    for msg in messages:
+        sender = User.query.get(msg.sender_id)
+        result.append({
+            'id': msg.id,
+            'sender_id': msg.sender_id,
+            'sender_name': sender.username if sender else 'Unknown',
+            'content': msg.content,
+            'timestamp': msg.timestamp.timestamp() * 1000
+        })
     return jsonify(result)
 
 
@@ -448,10 +523,13 @@ def handle_send_message(data):
         db.session.add(message)
         db.session.commit()
         
+        sender = User.query.get(sender_id)
+        
         message_data = {
             'id': message.id,
             'sender_id': sender_id,
             'receiver_id': receiver_id,
+            'sender_name': sender.username if sender else 'Unknown',
             'content': content,
             'timestamp': message.timestamp.isoformat(),
             'is_mine': False

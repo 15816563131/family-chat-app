@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Left chat bubble (smaller) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.9"
+        android:pathData="M28,45 L35,45 C38,45 40,47 40,50 L40,58 C40,61 38,63 35,63 L30,63 L26,67 L26.5,63 L24,63 C21,63 19,61 19,58 L19,50 C19,47 21,45 24,45 Z"/>
+    <!-- Right chat bubble (larger, WeChat style) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M50,38 L72,38 C77,38 81,42 81,47 L81,60 C81,65 77,69 72,69 L65,69 L61,74 L61.5,69 L55,69 C50,69 46,65 46,60 L46,47 C46,42 50,38 55,38 Z"/>
+    <!-- F letter in the bubble -->
+    <path
+        android:fillColor="#FF2E7D32"
+        android:pathData="M57,46 L57,66 L61,66 L61,57 L70,57 L70,53 L61,53 L61,50 L72,50 L72,46 Z"/>
+    <!-- Checkmark -->
+    <path
+        android:fillColor="#FF2E7D32"
+        android:fillAlpha="0.8"
+        android:pathData="M30,54 L33,57 L38,51"/>
+</vector>
