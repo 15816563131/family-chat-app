@@ -104,6 +104,21 @@ public class MainActivity extends Activity {
                     requestNotificationPermissionDelayed();
                 }
                 view.resumeTimers();
+
+                view.evaluateJavascript(
+                    "(function() {" +
+                    "  try {" +
+                    "    var saved = localStorage.getItem('currentUser');" +
+                    "    if (saved) {" +
+                    "      var user = JSON.parse(saved);" +
+                    "      if (user && user.id && window.AndroidBridge && window.AndroidBridge.setUserId) {" +
+                    "        window.AndroidBridge.setUserId(user.id);" +
+                    "      }" +
+                    "    }" +
+                    "  } catch(e) {}" +
+                    "})();",
+                    null
+                );
             }
         });
 

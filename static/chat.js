@@ -1141,6 +1141,16 @@ window.onload = function() {
     const savedUser = localStorage.getItem('currentUser');
     if (savedUser) {
         currentUser = JSON.parse(savedUser);
+        
+        try {
+            if (window.AndroidBridge && window.AndroidBridge.setUserId) {
+                window.AndroidBridge.setUserId(currentUser.id);
+                console.log('AndroidBridge.setUserId called on auto-login:', currentUser.id);
+            }
+        } catch (e) {
+            console.log('AndroidBridge not available:', e);
+        }
+        
         initChat();
     }
     
