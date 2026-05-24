@@ -935,15 +935,80 @@ async function selectFriend(friend) {
     loadMessages(friend.id);
 }
 
+// 通知测试功能
+function testNotification() {
+    console.log('🧪 正在测试通知功能...');
+    
+    if (!('Notification' in window)) {
+        alert('您的浏览器不支持通知功能');
+        return;
+    }
+    
+    if (Notification.permission === 'granted') {
+        // 权限已授予，显示测试通知
+        try {
+            const notification = new Notification('家庭聊天 - 测试通知', {
+                body: '✅ 通知功能正常工作！',
+                icon: '/static/icon.svg',
+                vibrate: [200, 100, 200, 100, 200],
+                tag: 'family-chat-test'
+            });
+            
+            notification.onclick = function() {
+                window.focus();
+                notification.close();
+            };
+            
+            console.log('✅ 测试通知已发出');
+        } catch (e) {
+            console.error('❌ 显示测试通知失败:', e);
+            alert('无法显示通知，请检查权限');
+        }
+    } else if (Notification.permission === 'default') {
+        // 权限未设置，请求权限
+        console.log('🔔 请求通知权限...');
+        Notification.requestPermission().then(permission => {
+            if (permission === 'granted') {
+                alert('✅ 通知权限已开启！再次点击测试通知按钮测试');
+            } else {
+                alert('⚠️ 通知权限未授予，请在设置中开启');
+            }
+        });
+    } else {
+        // 权限被拒绝
+        alert('❌ 通知权限被拒绝，请在浏览器/系统设置中开启');
+    }
+}
+
+// 检查并显示通知权限状态
+function checkNotificationPermission() {
+    if (!('Notification' in window)) {
+        return '不支持';
+    }
+    const status = Notification.permission;
+    console.log('📱 通知权限状态:', status);
+    return status;
+}
+
+// 主动请求通知权限
+function requestNotificationPermissionManually() {
+    if (!('Notification' in window)) {
+        alert('您的浏览器不支持通知功能');
+        return;
+    }
+    
+    Notification.requestPermission().then(permission => {
+        if (permission === 'granted') {
+            console.log('✅ 通知权限已授予');
+        }
+    });
+}
+
 window.onload = function() {
     const savedUser = localStorage.getItem('currentUser');
     if (savedUser) {
         currentUser = JSON.parse(savedUser);
         initChat();
-    }
-    
-    if ('Notification' in window && Notification.permission === 'default') {
-        Notification.requestPermission();
     }
     
     document.getElementById('profile-modal').addEventListener('click', function(e) {
