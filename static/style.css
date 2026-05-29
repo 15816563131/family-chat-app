@@ -1163,3 +1163,409 @@ body {
     background: rgba(237, 237, 237, 0.95);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
+
+/* ===== 手机响应式布局 ===== */
+@media (max-width: 768px) {
+    .sidebar {
+        width: 100% !important;
+        position: absolute !important;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 10;
+        transition: transform 0.3s ease;
+    }
+    .sidebar.hidden {
+        transform: translateX(-100%);
+    }
+    .chat-area {
+        width: 100% !important;
+        position: absolute !important;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 20;
+    }
+    #chat-container {
+        position: relative;
+        overflow: hidden;
+    }
+    .message-input button {
+        padding: 10px 16px;
+        font-size: 13px;
+    }
+    .message-input {
+        padding: 6px 8px;
+    }
+    .msg-bubble {
+        max-width: 80%;
+    }
+    .msg-content {
+        font-size: 14px;
+        padding: 8px 12px;
+    }
+    .chat-header {
+        padding: 10px 8px;
+    }
+}
+
+/* ===== 通话界面 ===== */
+#call-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0,0,0,0.9);
+    z-index: 2000;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+
+#call-overlay.active {
+    display: flex;
+}
+
+#incoming-call {
+    text-align: center;
+    color: white;
+    padding: 40px;
+}
+
+#incoming-call .caller-name {
+    font-size: 24px;
+    font-weight: 600;
+    margin-bottom: 8px;
+}
+
+#incoming-call .call-type-label {
+    font-size: 14px;
+    color: rgba(255,255,255,0.7);
+    margin-bottom: 40px;
+}
+
+.incoming-buttons {
+    display: flex;
+    gap: 60px;
+    justify-content: center;
+}
+
+.accept-call-btn {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    border: none;
+    background: #07c160;
+    color: white;
+    font-size: 28px;
+    cursor: pointer;
+    box-shadow: 0 4px 20px rgba(7,193,96,0.4);
+    transition: all 0.3s;
+}
+
+.reject-call-btn {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    border: none;
+    background: #f44336;
+    color: white;
+    font-size: 28px;
+    cursor: pointer;
+    box-shadow: 0 4px 20px rgba(244,67,54,0.4);
+    transition: all 0.3s;
+}
+
+#active-call {
+    width: 100%;
+    height: 100%;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    position: relative;
+}
+
+#active-call.active {
+    display: flex;
+}
+
+#remote-video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    background: #1a1a1a;
+}
+
+#local-video {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    width: 120px;
+    height: 160px;
+    object-fit: cover;
+    border-radius: 12px;
+    border: 2px solid rgba(255,255,255,0.3);
+    background: #333;
+    z-index: 10;
+}
+
+.call-controls {
+    position: absolute;
+    bottom: 40px;
+    left: 0;
+    right: 0;
+    display: flex;
+    justify-content: center;
+    gap: 30px;
+    z-index: 10;
+}
+
+.call-control-btn {
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    border: none;
+    color: white;
+    font-size: 24px;
+    cursor: pointer;
+    transition: all 0.3s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.call-control-btn.mute-btn {
+    background: rgba(255,255,255,0.2);
+}
+
+.call-control-btn.mute-btn.active {
+    background: #07c160;
+}
+
+.call-control-btn.speaker-btn {
+    background: rgba(255,255,255,0.2);
+}
+
+.call-control-btn.speaker-btn.active {
+    background: #07c160;
+}
+
+.call-control-btn.end-call-btn {
+    background: #f44336;
+    width: 64px;
+    height: 64px;
+    box-shadow: 0 4px 20px rgba(244,67,54,0.4);
+}
+
+.call-control-btn.end-call-btn:hover {
+    transform: scale(1.1);
+}
+
+.call-timer {
+    position: absolute;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: white;
+    font-size: 16px;
+    z-index: 10;
+    background: rgba(0,0,0,0.4);
+    padding: 6px 16px;
+    border-radius: 20px;
+}
+
+.call-avatar {
+    width: 80px;
+    height: 80px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 36px;
+    color: white;
+    margin-bottom: 20px;
+}
+
+/* ===== 语音消息 ===== */
+.voice-message {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    padding: 4px 0;
+    min-width: 120px;
+    max-width: 200px;
+}
+
+.voice-play-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(0,0,0,0.08);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    flex-shrink: 0;
+    transition: all 0.2s;
+}
+
+.voice-play-btn:hover {
+    background: rgba(0,0,0,0.15);
+}
+
+.voice-wave {
+    flex: 1;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.voice-wave-bar {
+    width: 3px;
+    border-radius: 2px;
+    background: #07c160;
+    animation: voiceWave 0.8s ease infinite alternate;
+}
+
+.voice-wave-bar.active {
+    animation: voiceWave 0.4s ease infinite alternate;
+}
+
+.voice-time {
+    font-size: 11px;
+    color: var(--wechat-text-light);
+    flex-shrink: 0;
+    min-width: 32px;
+    text-align: right;
+}
+
+@keyframes voiceWave {
+    0% { height: 4px; }
+    100% { height: 20px; }
+}
+
+/* ===== 语音输入按钮 ===== */
+.voice-input-btn {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: none;
+    background: var(--wechat-green);
+    color: white;
+    font-size: 18px;
+    cursor: pointer;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+}
+
+.voice-input-btn:active {
+    transform: scale(0.9);
+}
+
+.voice-input-btn.recording {
+    background: #f44336;
+    animation: pulse 1s infinite;
+}
+
+#voice-status {
+    font-size: 12px;
+    color: var(--wechat-text-secondary);
+    text-align: center;
+    padding: 4px;
+    display: none;
+}
+
+#voice-status.active {
+    display: block;
+    animation: pulse 1.5s infinite;
+}
+
+@media (max-width: 768px) {
+    .voice-input-btn {
+        width: 36px;
+        height: 36px;
+        font-size: 16px;
+    }
+    .voice-message {
+        min-width: 100px;
+        max-width: 160px;
+    }
+}
+
+/* ===== 语音消息气泡样式 (chat.js使用) ===== */
+.voice-message-bubble {
+    max-width: 200px !important;
+}
+
+.voice-msg-content {
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+    padding: 8px 12px !important;
+    cursor: pointer !important;
+    min-width: 100px;
+}
+
+.voice-play-icon {
+    font-size: 18px;
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.voice-duration {
+    font-size: 12px;
+    color: var(--wechat-text-secondary);
+    flex-shrink: 0;
+    min-width: 30px;
+}
+
+.voice-wave {
+    display: flex !important;
+    align-items: center !important;
+    gap: 2px !important;
+    height: 24px !important;
+    flex: 1 !important;
+}
+
+.voice-wave span {
+    width: 3px;
+    border-radius: 2px;
+    background: #07c160;
+    height: 4px;
+    animation: voiceWave 0.6s ease infinite alternate;
+}
+
+.voice-wave span:nth-child(1) { animation-delay: 0s; }
+.voice-wave span:nth-child(2) { animation-delay: 0.1s; }
+.voice-wave span:nth-child(3) { animation-delay: 0.2s; }
+.voice-wave span:nth-child(4) { animation-delay: 0.3s; }
+.voice-wave span:nth-child(5) { animation-delay: 0.4s; }
+
+.message.sent .voice-msg-content {
+    background: #95ec69;
+    border-top-right-radius: 2px;
+}
+
+.message.received .voice-msg-content {
+    background: #ffffff;
+    border-top-left-radius: 2px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}

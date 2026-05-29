@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>家庭聊天 - v1.3.0</title>
+    <title>家庭聊天 - v2.0.0</title>
     <link rel="stylesheet" href="/static/style.css">
     <link rel="manifest" href="/static/manifest.json">
     <meta name="theme-color" content="#07c160">
@@ -16,7 +16,7 @@
         <div id="login-container">
             <div class="auth-box">
                 <h2>🌈 家庭聊天</h2>
-                <div class="version-badge">v1.3.0</div>
+                <div class="version-badge">v2.0.0</div>
                 <div id="login-form">
                     <input type="text" id="login-username" placeholder="👤 用户名">
                     <input type="password" id="login-password" placeholder="🔒 密码">
@@ -115,14 +115,18 @@
                             </div>
                         </div>
                         <div class="chat-header-actions">
-                            <button class="action-btn" onclick="openFriendProfile()">👤</button>
+                            <button class="action-btn" onclick="openFriendProfile()" title="好友资料">👤</button>
+                            <button class="action-btn" onclick="startCall('audio')" title="语音通话">🎵</button>
+                            <button class="action-btn" onclick="startCall('video')" title="视频通话">📹</button>
                         </div>
                     </div>
                     <div id="messages-container"></div>
                     <div class="message-input">
+                        <button class="voice-input-btn" id="voice-input-btn" title="语音输入">🎤</button>
                         <input type="text" id="message-input" placeholder="💬 输入消息..." onkeypress="handleKeyPress(event)">
                         <button onclick="sendMessage()">发送 🚀</button>
                     </div>
+                    <div id="voice-status"></div>
                 </div>
             </div>
         </div>
@@ -176,10 +180,35 @@
                     <label>个性签名</label>
                     <textarea id="friend-profile-bio" readonly></textarea>
                 </div>
-                <div class="friend-actions">
+                <div class="friend-actions" style="flex-wrap: wrap;">
+                    <button class="call-action-btn" onclick="startCall('audio')">🎵 语音通话</button>
+                    <button class="call-action-btn video-call-btn" onclick="startCall('video')">📹 视频通话</button>
                     <button class="delete-btn" onclick="deleteFriend()">❌ 删除好友</button>
-                    <button class="block-btn" onclick="blockFriend()">⛔ 加入黑名单</button>
+                    <button class="block-btn" onclick="blockFriend()">⛔ 拉黑</button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== 通话界面 ===== -->
+    <div id="call-overlay">
+        <div id="incoming-call">
+            <div class="call-avatar" id="caller-avatar">?</div>
+            <div class="caller-name" id="caller-name">正在呼叫...</div>
+            <div class="call-type-label" id="call-type-label">📹 视频通话</div>
+            <div class="incoming-buttons">
+                <button class="reject-call-btn" onclick="rejectCall()" title="拒绝">📞</button>
+                <button class="accept-call-btn" onclick="acceptCall()" title="接听">📞</button>
+            </div>
+        </div>
+        <div id="active-call">
+            <video id="remote-video" autoplay playsinline></video>
+            <video id="local-video" autoplay playsinline muted></video>
+            <div class="call-timer" id="call-timer">00:00</div>
+            <div class="call-controls">
+                <button class="call-control-btn mute-btn" id="mute-btn" onclick="toggleMute()">🔊</button>
+                <button class="call-control-btn end-call-btn" onclick="endCall()">📞</button>
+                <button class="call-control-btn speaker-btn" id="speaker-btn" onclick="toggleSpeaker()">🔊</button>
             </div>
         </div>
     </div>

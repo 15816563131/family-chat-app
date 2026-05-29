@@ -7,6 +7,655 @@ let isConnected = false;
 let reconnectTimer = null;
 let lastMessageCheckTime = Date.now();
 let currentTab = 'friends';
+const displayedMessageIds = new Set();
+const unreadMessages = {};
+
+// ===== 语音输入 (Speech-to-Text) =====
+let speechRecognition = null;
+let isSpeechRecording = false;
+
+// ===== 语音消息录制 =====
+let mediaRecorder = null;
+let audioChunks = [];
+let isAudioRecording = false;
+let longPressTimer = null;
+let isLongPress = false;
+
+// ===== WebRTC 通话 =====
+let peerConnection = null;
+let localStream = null;
+let remoteStream = null;
+let isCallActive = false;
+let isCallInitiator = false;
+let pendingOffer = null;
+let callType = 'audio'; // 'audio' 或 'video'
+
+// ===== Web Audio API 响铃 =====
+let audioContext = null;
+let ringtoneGainNode = null;
+let ringtoneOscillator = null;
+let isRinging = false;
+
+// ===== 音频上下文初始化 =====
+function getAudioContext() {
+    if (!audioContext) {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    return audioContext;
+}
+
+// ===== 响铃功能 =====
+function playRingtone() {
+    if (isRinging) return;
+    const ctx = getAudioContext();
+    
+    const gainNode = ctx.createGain();
+    gainNode.gain.value = 0.3;
+    gainNode.connect(ctx.destination);
+    
+    const oscillator = ctx.createOscillator();
+    oscillator.type = 'sine';
+    oscillator.frequency.value = 440;
+    oscillator.connect(gainNode);
+    
+    const now = ctx.currentTime;
+    for (let i = 0; i < 20; i++) {
+        const t = now + i * 0.5;
+        const isOn = Math.floor(i / 2) % 2 === 0;
+        gainNode.gain.setValueAtTime(isOn ? 0.3 : 0, t);
+        gainNode.gain.linearRampToValueAtTime(isOn ? 0.3 : 0, t + 0.05);
+
+        oscillator.frequency.setValueAtTime(440, t);
+        oscillator.frequency.setValueAtTime(isOn ? 500 : 440, t + 0.05);
+        oscillator.frequency.linearRampToValueAtTime(isOn ? 500 : 440, t + 0.25);
+    }
+    
+    oscillator.start(now);
+    ringtoneOscillator = oscillator;
+    ringtoneGainNode = gainNode;
+    isRinging = true;
+}
+
+function stopRingtone() {
+    if (ringtoneOscillator) {
+        try {
+            ringtoneOscillator.stop();
+        } catch (e) {}
+        ringtoneOscillator = null;
+    }
+    if (ringtoneGainNode) {
+        try {
+            ringtoneGainNode.disconnect();
+        } catch (e) {}
+        ringtoneGainNode = null;
+    }
+    isRinging = false;
+}
+
+function playMessageSound() {
+    const ctx = getAudioContext();
+    const gainNode = ctx.createGain();
+    gainNode.gain.value = 0.2;
+    gainNode.connect(ctx.destination);
+    
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(800, now);
+    osc.frequency.setValueAtTime(1000, now + 0.05);
+    osc.connect(gainNode);
+    gainNode.gain.setValueAtTime(0.2, now);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+    osc.start(now);
+    osc.stop(now + 0.15);
+}
+
+function playCallConnectSound() {
+    const ctx = getAudioContext();
+    const gainNode = ctx.createGain();
+    gainNode.gain.value = 0.25;
+    gainNode.connect(ctx.destination);
+    
+    const now = ctx.currentTime;
+    [523, 659, 784].forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        osc.connect(gainNode);
+        const t = now + i * 0.12;
+        gainNode.gain.setValueAtTime(0.25, t);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, t + 0.15);
+        osc.start(t);
+        osc.stop(t + 0.15);
+    });
+}
+
+function playCallEndSound() {
+    const ctx = getAudioContext();
+    const gainNode = ctx.createGain();
+    gainNode.gain.value = 0.25;
+    gainNode.connect(ctx.destination);
+    
+    const now = ctx.currentTime;
+    [784, 659, 523].forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        osc.connect(gainNode);
+        const t = now + i * 0.15;
+        gainNode.gain.setValueAtTime(0.25, t);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, t + 0.2);
+        osc.start(t);
+        osc.stop(t + 0.2);
+    });
+}
+
+// ===== 语音输入 (Speech-to-Text) =====
+function initSpeechRecognition() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+        console.log('浏览器不支持语音识别');
+        return false;
+    }
+    
+    speechRecognition = new SpeechRecognition();
+    speechRecognition.lang = 'zh-CN';
+    speechRecognition.continuous = false;
+    speechRecognition.interimResults = false;
+    speechRecognition.maxAlternatives = 1;
+    
+    speechRecognition.onresult = function(event) {
+        const transcript = event.results[0][0].transcript;
+        const input = document.getElementById('message-input');
+        input.value = input.value + transcript;
+        document.getElementById('voice-status').textContent = '';
+        isSpeechRecording = false;
+        document.getElementById('voice-input-btn').textContent = '🎤';
+    };
+    
+    speechRecognition.onerror = function(event) {
+        console.error('语音识别错误:', event.error);
+        document.getElementById('voice-status').textContent = '语音识别失败: ' + event.error;
+        isSpeechRecording = false;
+        document.getElementById('voice-input-btn').textContent = '🎤';
+    };
+    
+    speechRecognition.onend = function() {
+        if (isSpeechRecording) {
+            try {
+                speechRecognition.start();
+            } catch (e) {}
+        }
+    };
+    
+    return true;
+}
+
+function toggleSpeechRecognition() {
+    if (!speechRecognition) {
+        if (!initSpeechRecognition()) {
+            document.getElementById('voice-status').textContent = '浏览器不支持语音识别';
+            return;
+        }
+    }
+    
+    if (isSpeechRecording) {
+        speechRecognition.stop();
+        isSpeechRecording = false;
+        document.getElementById('voice-input-btn').textContent = '🎤';
+        document.getElementById('voice-status').textContent = '';
+    } else {
+        try {
+            speechRecognition.start();
+            isSpeechRecording = true;
+            document.getElementById('voice-input-btn').textContent = '🔴';
+            document.getElementById('voice-status').textContent = '🎙️ 正在聆听...';
+        } catch (e) {
+            console.error('启动语音识别失败:', e);
+        }
+    }
+}
+
+// ===== 语音消息录制 (MediaRecorder) =====
+function startVoiceRecording() {
+    if (isAudioRecording) return;
+    
+    navigator.mediaDevices.getUserMedia({ audio: true })
+        .then(function(stream) {
+            audioChunks = [];
+            mediaRecorder = new MediaRecorder(stream);
+            
+            mediaRecorder.ondataavailable = function(event) {
+                if (event.data.size > 0) {
+                    audioChunks.push(event.data);
+                }
+            };
+            
+            mediaRecorder.onstop = function() {
+                const tracks = stream.getTracks();
+                tracks.forEach(function(track) { track.stop(); });
+                
+                if (audioChunks.length > 0 && isLongPress) {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                    sendVoiceMessage(audioBlob);
+                }
+                isAudioRecording = false;
+                isLongPress = false;
+                document.getElementById('voice-input-btn').textContent = '🎤';
+                document.getElementById('voice-status').textContent = '';
+            };
+            
+            mediaRecorder.start();
+            isAudioRecording = true;
+            document.getElementById('voice-input-btn').textContent = '🔴';
+            document.getElementById('voice-status').textContent = '🎙️ 录音中... 松开发送';
+        })
+        .catch(function(error) {
+            console.error('获取麦克风权限失败:', error);
+            document.getElementById('voice-status').textContent = '无法访问麦克风';
+        });
+}
+
+function stopVoiceRecording() {
+    if (mediaRecorder && isAudioRecording) {
+        mediaRecorder.stop();
+    }
+}
+
+async function sendVoiceMessage(audioBlob) {
+    if (!currentFriendId) {
+        document.getElementById('voice-status').textContent = '请先选择聊天对象';
+        return;
+    }
+    
+    const formData = new FormData();
+    formData.append('audio', audioBlob, 'voice_' + Date.now() + '.webm');
+    formData.append('sender_id', currentUser.id);
+    formData.append('receiver_id', currentFriendId);
+    
+    try {
+        const response = await fetch('/api/voice/upload', {
+            method: 'POST',
+            body: formData
+        });
+        
+        const data = await response.json();
+        if (response.ok && data.url) {
+            if (socket && isConnected) {
+                socket.emit('send_message', {
+                    sender_id: currentUser.id,
+                    receiver_id: currentFriendId,
+                    content: '🎤 [语音消息]',
+                    voice_url: data.url,
+                    voice_duration: data.duration || 0
+                });
+            }
+        } else {
+            document.getElementById('voice-status').textContent = '语音上传失败';
+        }
+    } catch (error) {
+        console.error('上传语音失败:', error);
+        document.getElementById('voice-status').textContent = '语音上传失败';
+    }
+}
+
+// ===== 手机端侧边栏管理 =====
+function isMobile() {
+    return window.innerWidth < 768;
+}
+
+function showMobileSidebar() {
+    const sidebar = document.querySelector('.sidebar');
+    const chatArea = document.querySelector('.chat-area');
+    if (sidebar) sidebar.style.display = 'flex';
+    if (chatArea) chatArea.style.display = 'none';
+}
+
+function showMobileChat() {
+    const sidebar = document.querySelector('.sidebar');
+    const chatArea = document.querySelector('.chat-area');
+    if (sidebar) sidebar.style.display = 'none';
+    if (chatArea) chatArea.style.display = 'flex';
+}
+
+function handleResize() {
+    if (!currentUser) return;
+    
+    if (isMobile()) {
+        if (currentFriendId) {
+            showMobileChat();
+        } else {
+            showMobileSidebar();
+        }
+    } else {
+        const sidebar = document.querySelector('.sidebar');
+        const chatArea = document.querySelector('.chat-area');
+        if (sidebar) sidebar.style.display = 'flex';
+        if (chatArea) chatArea.style.display = 'flex';
+    }
+}
+
+// ===== WebRTC 通话 =====
+const RTC_CONFIG = {
+    iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+    ]
+};
+
+function showCallOverlay() {
+    document.getElementById('call-overlay').style.display = 'flex';
+}
+
+function hideCallOverlay() {
+    document.getElementById('call-overlay').style.display = 'none';
+    document.getElementById('incoming-call').style.display = 'none';
+    document.getElementById('active-call').style.display = 'none';
+}
+
+function startCall(type) {
+    if (!currentFriendId) return;
+    callType = type;
+    isCallInitiator = true;
+    
+    showCallOverlay();
+    document.getElementById('incoming-call').style.display = 'flex';
+    document.getElementById('active-call').style.display = 'none';
+    document.getElementById('caller-name').textContent = '正在呼叫 ' + (currentFriendInfo ? currentFriendInfo.username : '...');
+    document.getElementById('call-type-label').textContent = type === 'video' ? '📹 视频通话' : '🎵 语音通话';
+    document.getElementById('caller-avatar').textContent = getAvatarInitial(currentFriendInfo ? currentFriendInfo.username : '');
+    
+    document.querySelector('.accept-call-btn').style.display = 'none';
+    document.querySelector('.reject-call-btn').textContent = '📞';
+    
+    playRingtone();
+    
+    navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: type === 'video'
+    })
+    .then(function(stream) {
+        localStream = stream;
+        const localVideo = document.getElementById('local-video');
+        localVideo.srcObject = stream;
+        
+        if (type === 'audio') {
+            localVideo.style.display = 'none';
+        } else {
+            localVideo.style.display = 'block';
+        }
+        
+        createPeerConnection();
+        
+        localStream.getTracks().forEach(function(track) {
+            if (localStream) {
+                peerConnection.addTrack(track, localStream);
+            }
+        });
+        
+        peerConnection.createOffer()
+            .then(function(offer) {
+                return peerConnection.setLocalDescription(offer);
+            })
+            .then(function() {
+                if (socket && isConnected) {
+                    socket.emit('webrtc_offer', {
+                        from: currentUser.id,
+                        to: currentFriendId,
+                        sdp: peerConnection.localDescription,
+                        call_type: type
+                    });
+                }
+            })
+            .catch(function(error) {
+                console.error('创建Offer失败:', error);
+                endCall();
+            });
+    })
+    .catch(function(error) {
+        console.error('获取媒体设备失败:', error);
+        endCall();
+        alert('无法访问摄像头/麦克风');
+    });
+}
+
+function createPeerConnection() {
+    peerConnection = new RTCPeerConnection(RTC_CONFIG);
+    
+    peerConnection.onicecandidate = function(event) {
+        if (event.candidate && socket && isConnected) {
+            socket.emit('webrtc_ice_candidate', {
+                from: currentUser.id,
+                to: currentFriendId,
+                candidate: event.candidate
+            });
+        }
+    };
+    
+    peerConnection.ontrack = function(event) {
+        remoteStream = event.streams[0];
+        const remoteVideo = document.getElementById('remote-video');
+        remoteVideo.srcObject = remoteStream;
+    };
+    
+    peerConnection.oniceconnectionstatechange = function() {
+        if (peerConnection.iceConnectionState === 'disconnected' ||
+            peerConnection.iceConnectionState === 'failed' ||
+            peerConnection.iceConnectionState === 'closed') {
+            endCall();
+        }
+    };
+}
+
+function acceptCall() {
+    if (!pendingOffer) return;
+    
+    stopRingtone();
+    document.getElementById('incoming-call').style.display = 'none';
+    document.getElementById('active-call').style.display = 'flex';
+    
+    playCallConnectSound();
+    
+    navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: pendingOffer.call_type === 'video'
+    })
+    .then(function(stream) {
+        localStream = stream;
+        const localVideo = document.getElementById('local-video');
+        localVideo.srcObject = stream;
+        
+        if (pendingOffer.call_type === 'audio') {
+            localVideo.style.display = 'none';
+        } else {
+            localVideo.style.display = 'block';
+        }
+        
+        callType = pendingOffer.call_type;
+        createPeerConnection();
+        
+        localStream.getTracks().forEach(function(track) {
+            if (localStream) {
+                peerConnection.addTrack(track, localStream);
+            }
+        });
+        
+        peerConnection.setRemoteDescription(new RTCSessionDescription(pendingOffer.sdp))
+            .then(function() {
+                return peerConnection.createAnswer();
+            })
+            .then(function(answer) {
+                return peerConnection.setLocalDescription(answer);
+            })
+            .then(function() {
+                if (socket && isConnected) {
+                    socket.emit('webrtc_answer', {
+                        from: currentUser.id,
+                        to: pendingOffer.from,
+                        sdp: peerConnection.localDescription
+                    });
+                }
+                isCallActive = true;
+            })
+            .catch(function(error) {
+                console.error('接听通话失败:', error);
+                endCall();
+            });
+    })
+    .catch(function(error) {
+        console.error('获取媒体设备失败:', error);
+        endCall();
+    });
+    
+    pendingOffer = null;
+}
+
+function rejectCall() {
+    stopRingtone();
+    if (socket && isConnected && pendingOffer) {
+        socket.emit('webrtc_reject', {
+            from: currentUser.id,
+            to: pendingOffer.from
+        });
+    }
+    pendingOffer = null;
+    hideCallOverlay();
+    playCallEndSound();
+}
+
+function endCall() {
+    stopRingtone();
+    
+    if (peerConnection) {
+        peerConnection.close();
+        peerConnection = null;
+    }
+    
+    if (localStream) {
+        localStream.getTracks().forEach(function(track) { track.stop(); });
+        localStream = null;
+    }
+    
+    if (remoteStream) {
+        remoteStream.getTracks().forEach(function(track) { track.stop(); });
+        remoteStream = null;
+    }
+    
+    isCallActive = false;
+    isCallInitiator = false;
+    pendingOffer = null;
+    
+    document.getElementById('local-video').srcObject = null;
+    document.getElementById('remote-video').srcObject = null;
+    document.getElementById('local-video').style.display = 'block';
+    
+    if (socket && isConnected && currentFriendId) {
+        socket.emit('webrtc_end_call', {
+            from: currentUser.id,
+            to: currentFriendId
+        });
+    }
+    
+    hideCallOverlay();
+    playCallEndSound();
+}
+
+function toggleMute() {
+    if (localStream) {
+        const audioTrack = localStream.getAudioTracks()[0];
+        if (audioTrack) {
+            audioTrack.enabled = !audioTrack.enabled;
+            document.getElementById('mute-btn').textContent = audioTrack.enabled ? '🔊' : '🔇';
+        }
+    }
+}
+
+function toggleSpeaker() {
+    const remoteVideo = document.getElementById('remote-video');
+    if (remoteVideo) {
+        remoteVideo.muted = !remoteVideo.muted;
+        document.getElementById('speaker-btn').textContent = remoteVideo.muted ? '🔇' : '🔊';
+    }
+}
+
+// ===== SocketIO WebRTC 事件处理 =====
+function initWebRTCSocketHandlers() {
+    socket.on('webrtc_offer', function(data) {
+        if (isCallActive) {
+            socket.emit('webrtc_busy', { from: currentUser.id, to: data.from });
+            return;
+        }
+        
+        pendingOffer = data;
+        callType = data.call_type || 'audio';
+        isCallInitiator = false;
+        
+        showCallOverlay();
+        document.getElementById('incoming-call').style.display = 'flex';
+        document.getElementById('active-call').style.display = 'none';
+        document.getElementById('caller-name').textContent = data.caller_name + ' 邀请你通话';
+        document.getElementById('call-type-label').textContent = data.call_type === 'video' ? '📹 视频通话' : '🎵 语音通话';
+        document.getElementById('caller-avatar').textContent = getAvatarInitial(data.caller_name);
+        
+        document.querySelector('.accept-call-btn').style.display = 'inline-block';
+        document.querySelector('.reject-call-btn').textContent = '📞';
+        
+        playRingtone();
+    });
+    
+    socket.on('webrtc_answer', function(data) {
+        if (peerConnection && peerConnection.remoteDescription === null) {
+            peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp))
+                .then(function() {
+                    stopRingtone();
+                    isCallActive = true;
+                    document.getElementById('incoming-call').style.display = 'none';
+                    document.getElementById('active-call').style.display = 'flex';
+                    playCallConnectSound();
+                })
+                .catch(function(error) {
+                    console.error('设置远端描述失败:', error);
+                });
+        }
+    });
+    
+    socket.on('webrtc_ice_candidate', function(data) {
+        if (peerConnection && peerConnection.remoteDescription) {
+            peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate))
+                .catch(function(error) {
+                    console.error('添加ICE Candidate失败:', error);
+                });
+        }
+    });
+    
+    socket.on('webrtc_reject', function(data) {
+        stopRingtone();
+        if (isCallInitiator) {
+            playCallEndSound();
+            alert('对方拒绝了通话');
+            endCall();
+        }
+    });
+    
+    socket.on('webrtc_end_call', function(data) {
+        if (isCallActive || isCallInitiator) {
+            stopRingtone();
+            playCallEndSound();
+            endCall();
+        }
+    });
+    
+    socket.on('webrtc_busy', function(data) {
+        stopRingtone();
+        if (isCallInitiator) {
+            playCallEndSound();
+            alert('对方正忙');
+            endCall();
+        }
+    });
+}
+
+// ===== 原有功能函数 =====
 
 function showRegister() {
     document.getElementById('login-form').style.display = 'none';
@@ -130,6 +779,9 @@ async function login() {
 }
 
 function logout() {
+    if (isCallActive || isCallInitiator) {
+        endCall();
+    }
     if (socket) {
         socket.emit('leave', { user_id: currentUser.id });
         socket.disconnect();
@@ -146,8 +798,6 @@ function logout() {
     document.getElementById('login-container').style.display = 'flex';
     showLogin();
 }
-
-
 
 async function loadFriends() {
     try {
@@ -367,12 +1017,30 @@ function addMessageToUI(message) {
     const senderName = message.sender_name || (currentFriendInfo ? currentFriendInfo.username : '') || '';
     const avatarHtml = `<div class="message-avatar"><span class="avatar-initial">${getAvatarInitial(senderName)}</span></div>`;
     
-    const bubbleContent = `
-        <div class="msg-bubble">
-            <div class="msg-content">${escapeHtml(message.content)}</div>
-            <div class="msg-time">${message.is_temporary ? '发送中...' : time}</div>
-        </div>
-    `;
+    let bubbleContent;
+    
+    if (message.voice_url) {
+        const duration = message.voice_duration ? Math.round(message.voice_duration) + '"' : '语音';
+        bubbleContent = `
+            <div class="msg-bubble voice-message-bubble">
+                <div class="msg-content voice-msg-content" onclick="playVoiceMessage(this, '${escapeHtml(message.voice_url)}')">
+                    <span class="voice-play-icon">▶️</span>
+                    <span class="voice-duration">${duration}</span>
+                    <div class="voice-wave">
+                        <span></span><span></span><span></span><span></span><span></span>
+                    </div>
+                </div>
+                <div class="msg-time">${message.is_temporary ? '发送中...' : time}</div>
+            </div>
+        `;
+    } else {
+        bubbleContent = `
+            <div class="msg-bubble">
+                <div class="msg-content">${escapeHtml(message.content)}</div>
+                <div class="msg-time">${message.is_temporary ? '发送中...' : time}</div>
+            </div>
+        `;
+    }
     
     messageElement.innerHTML = message.is_mine
         ? `${bubbleContent}${avatarHtml}`
@@ -380,6 +1048,23 @@ function addMessageToUI(message) {
     
     messagesContainer.appendChild(messageElement);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+
+function playVoiceMessage(element, url) {
+    const audio = new Audio(url);
+    audio.play().catch(function(error) {
+        console.error('播放语音失败:', error);
+    });
+    
+    if (element) {
+        const playIcon = element.querySelector('.voice-play-icon');
+        if (playIcon) {
+            playIcon.textContent = '⏸️';
+            audio.onended = function() {
+                playIcon.textContent = '▶️';
+            };
+        }
+    }
 }
 
 function getAvatarInitial(name) {
@@ -397,9 +1082,6 @@ function escapeHtml(text) {
 function getUserAvatar(userId) {
     return '/api/avatar/' + userId;
 }
-
-const displayedMessageIds = new Set();
-const unreadMessages = {};
 
 function handleReceivedMessage(message) {
     console.log('处理收到的消息:', message);
@@ -432,9 +1114,7 @@ function handleReceivedMessage(message) {
         unreadMessages[senderId]++;
         console.log('未读消息计数:', unreadMessages);
 
-        // 获取发送者名称
         let senderName = message.sender_name || '好友';
-        // 从好友列表中查找名称
         const friendItem = document.querySelector(`[data-friend-id="${senderId}"]`);
         if (friendItem) {
             const nameEl = friendItem.querySelector('.friend-name');
@@ -443,7 +1123,6 @@ function handleReceivedMessage(message) {
             }
         }
 
-        // 直接调用Android原生通知
         try {
             if (window.AndroidBridge && typeof window.AndroidBridge.showNotification === 'function') {
                 window.AndroidBridge.showNotification(senderName, message.content);
@@ -453,6 +1132,8 @@ function handleReceivedMessage(message) {
         } catch (e) {
             console.log('通知调用失败:', e);
         }
+
+        playMessageSound();
     }
     
     const isInCurrentChat = (message.sender_id === currentFriendId || message.receiver_id === currentFriendId);
@@ -575,7 +1256,6 @@ function handleKeyPress(event) {
         sendMessage();
     }
 }
-
 
 function updateUserAvatar() {
     const avatarInitial = getAvatarInitial(currentUser.username);
@@ -707,6 +1387,9 @@ async function deleteFriend() {
             document.getElementById('chat-window').style.display = 'none';
             loadFriends();
             loadContacts();
+            if (isMobile()) {
+                showMobileSidebar();
+            }
             alert('已删除好友');
         } else {
             alert(result.error || '删除失败');
@@ -742,6 +1425,9 @@ async function blockFriend() {
             loadFriends();
             loadContacts();
             loadBlacklist();
+            if (isMobile()) {
+                showMobileSidebar();
+            }
             alert('已加入黑名单');
         } else {
             alert(result.error || '操作失败');
@@ -847,6 +1533,260 @@ async function unblockUser(blockedUserId) {
     }
 }
 
+async function selectFriend(friend) {
+    currentFriendId = friend.id;
+    currentFriendInfo = friend;
+    
+    document.querySelectorAll('.friend-item').forEach(item => {
+        item.classList.remove('active');
+    });
+    const activeItem = document.querySelector(`[data-friend-id="${friend.id}"]`);
+    if (activeItem) {
+        activeItem.classList.add('active');
+    }
+    
+    document.getElementById('no-chat-selected').style.display = 'none';
+    document.getElementById('chat-window').style.display = 'flex';
+    document.getElementById('chat-with-username').textContent = friend.username;
+    document.getElementById('friend-avatar-initial').textContent = getAvatarInitial(friend.username);
+    
+    unreadMessages[friend.id] = 0;
+    loadFriends();
+    
+    loadMessages(friend.id);
+
+    if (isMobile()) {
+        showMobileChat();
+    }
+}
+
+function closeChat() {
+    document.getElementById('chat-window').style.display = 'none';
+    document.getElementById('no-chat-selected').style.display = 'flex';
+    currentFriendId = null;
+    currentFriendInfo = null;
+
+    if (isMobile()) {
+        showMobileSidebar();
+    }
+}
+
+async function uploadAvatar(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append('avatar', file);
+
+    try {
+        const response = await fetch('/api/avatar/upload/' + currentUser.id, {
+            method: 'POST',
+            body: formData
+        });
+
+        const data = await response.json();
+        if (response.ok) {
+            const imgElement = document.getElementById('profile-avatar-img');
+            const initialElement = document.getElementById('profile-avatar-initial');
+            imgElement.src = data.avatar_url + '?t=' + Date.now();
+            imgElement.style.display = 'block';
+            initialElement.style.display = 'none';
+            alert('头像上传成功！');
+        } else {
+            alert(data.error || '上传失败');
+        }
+    } catch (error) {
+        console.error('上传头像失败:', error);
+        alert('上传头像失败，请重试');
+    }
+}
+
+function isAndroidWebView() {
+    const ua = navigator.userAgent.toLowerCase();
+    return ua.indexOf('wv') >= 0 || window.AndroidBridge !== undefined;
+}
+
+function testNotification() {
+    console.log('🧪 正在测试通知功能...');
+    
+    if (isAndroidWebView()) {
+        console.log('📱 检测到Android WebView环境');
+    }
+    
+    if (window.AndroidBridge && typeof window.AndroidBridge.showNotification === 'function') {
+        console.log('📱 使用Android原生通知测试');
+        window.AndroidBridge.showNotification('家庭聊天 - 测试通知', '✅ Android原生通知正常工作！');
+        alert('✅ 已发出Android原生通知，请检查通知栏！');
+        return;
+    }
+    
+    if (!('Notification' in window)) {
+        showBrowserCompatibilityTip();
+        return;
+    }
+    
+    if (Notification.permission === 'granted') {
+        try {
+            const notification = new Notification('家庭聊天 - 测试通知', {
+                body: '✅ 通知功能正常工作！',
+                icon: '/static/icon.svg',
+                vibrate: [200, 100, 200, 100, 200],
+                tag: 'family-chat-test'
+            });
+            
+            notification.onclick = function() {
+                window.focus();
+                notification.close();
+            };
+            
+            console.log('✅ 测试通知已发出');
+            alert('✅ 测试通知已发出，请检查通知栏！');
+        } catch (e) {
+            console.error('❌ 显示测试通知失败:', e);
+            alert('无法显示通知，请检查权限或尝试使用其他浏览器');
+        }
+    } else if (Notification.permission === 'default') {
+        console.log('🔔 请求通知权限...');
+        Notification.requestPermission().then(permission => {
+            if (permission === 'granted') {
+                alert('✅ 通知权限已开启！再次点击测试通知按钮测试');
+            } else {
+                showPermissionHelpTip();
+            }
+        });
+    } else {
+        showPermissionHelpTip();
+    }
+}
+
+function showBrowserCompatibilityTip() {
+    const browserTip = `⚠️ 您的浏览器不支持通知功能！
+
+📱 建议解决方案：
+
+方案一（推荐）：
+使用我们的Android APP
+- 自动处理通知权限
+- 功能更完整
+
+方案二：
+更换浏览器（推荐）：
+• Chrome 浏览器
+• Edge 浏览器
+• Firefox 浏览器
+
+方案三：
+继续使用，聊天功能仍然正常
+只是无法收到后台通知`;
+    alert(browserTip);
+}
+
+function showPermissionHelpTip() {
+    const helpTip = `🔔 通知权限设置帮助
+
+在系统设置中开启：
+1. 打开手机"设置"
+2. 找到"应用"或"应用管理"
+3. 找到当前APP/浏览器
+4. 打开"通知权限"
+5. 允许显示通知
+
+开启后刷新页面重试！`;
+    alert(helpTip);
+}
+
+function checkNotificationPermission() {
+    if (!('Notification' in window)) {
+        return '不支持';
+    }
+    const status = Notification.permission;
+    console.log('📱 通知权限状态:', status);
+    return status;
+}
+
+function requestNotificationPermissionManually() {
+    if (!('Notification' in window)) {
+        alert('您的浏览器不支持通知功能');
+        return;
+    }
+    
+    Notification.requestPermission().then(permission => {
+        if (permission === 'granted') {
+            console.log('✅ 通知权限已授予');
+        }
+    });
+}
+
+// ===== 语音输入按钮事件绑定 =====
+function initVoiceButton() {
+    const voiceBtn = document.getElementById('voice-input-btn');
+    if (!voiceBtn) return;
+
+    voiceBtn.addEventListener('click', function(e) {
+        if (isAudioRecording) return;
+        toggleSpeechRecognition();
+    });
+
+    voiceBtn.addEventListener('mousedown', function(e) {
+        if (isSpeechRecording) return;
+        isLongPress = false;
+        longPressTimer = setTimeout(function() {
+            isLongPress = true;
+            startVoiceRecording();
+        }, 400);
+    });
+
+    voiceBtn.addEventListener('mouseup', function(e) {
+        if (longPressTimer) {
+            clearTimeout(longPressTimer);
+            longPressTimer = null;
+        }
+        if (isLongPress) {
+            stopVoiceRecording();
+        }
+    });
+
+    voiceBtn.addEventListener('mouseleave', function(e) {
+        if (longPressTimer) {
+            clearTimeout(longPressTimer);
+            longPressTimer = null;
+        }
+        if (isLongPress) {
+            stopVoiceRecording();
+        }
+    });
+
+    voiceBtn.addEventListener('touchstart', function(e) {
+        if (isSpeechRecording) return;
+        isLongPress = false;
+        longPressTimer = setTimeout(function() {
+            isLongPress = true;
+            startVoiceRecording();
+        }, 400);
+    }, { passive: true });
+
+    voiceBtn.addEventListener('touchend', function(e) {
+        if (longPressTimer) {
+            clearTimeout(longPressTimer);
+            longPressTimer = null;
+        }
+        if (isLongPress) {
+            stopVoiceRecording();
+        }
+    }, { passive: true });
+
+    voiceBtn.addEventListener('touchcancel', function(e) {
+        if (longPressTimer) {
+            clearTimeout(longPressTimer);
+            longPressTimer = null;
+        }
+        if (isLongPress) {
+            stopVoiceRecording();
+        }
+    }, { passive: true });
+}
+
+// ===== 初始化聊天 =====
 function initChat() {
     document.getElementById('login-container').style.display = 'none';
     document.getElementById('chat-container').style.display = 'flex';
@@ -930,6 +1870,11 @@ function initChat() {
         showSyncStatus('连接错误，请检查网络', true);
     });
     
+    initWebRTCSocketHandlers();
+    initVoiceButton();
+
+    handleResize();
+    
     loadFriends();
     loadFriendRequests();
     
@@ -945,197 +1890,6 @@ function initChat() {
             showSyncStatus('正在尝试建立连接...', true);
         }
     }, 5000);
-}
-
-async function selectFriend(friend) {
-    currentFriendId = friend.id;
-    currentFriendInfo = friend;
-    
-    document.querySelectorAll('.friend-item').forEach(item => {
-        item.classList.remove('active');
-    });
-    const activeItem = document.querySelector(`[data-friend-id="${friend.id}"]`);
-    if (activeItem) {
-        activeItem.classList.add('active');
-    }
-    
-    document.getElementById('no-chat-selected').style.display = 'none';
-    document.getElementById('chat-window').style.display = 'flex';
-    document.getElementById('chat-with-username').textContent = friend.username;
-    document.getElementById('friend-avatar-initial').textContent = getAvatarInitial(friend.username);
-    
-    unreadMessages[friend.id] = 0;
-    loadFriends();
-    
-    loadMessages(friend.id);
-}
-
-function closeChat() {
-    document.getElementById('chat-window').style.display = 'none';
-    document.getElementById('no-chat-selected').style.display = 'flex';
-    currentFriendId = null;
-    currentFriendInfo = null;
-}
-
-async function uploadAvatar(event) {
-    const file = event.target.files[0];
-    if (!file) return;
-
-    const formData = new FormData();
-    formData.append('avatar', file);
-
-    try {
-        const response = await fetch('/api/avatar/upload/' + currentUser.id, {
-            method: 'POST',
-            body: formData
-        });
-
-        const data = await response.json();
-        if (response.ok) {
-            const imgElement = document.getElementById('profile-avatar-img');
-            const initialElement = document.getElementById('profile-avatar-initial');
-            imgElement.src = data.avatar_url + '?t=' + Date.now();
-            imgElement.style.display = 'block';
-            initialElement.style.display = 'none';
-            alert('头像上传成功！');
-        } else {
-            alert(data.error || '上传失败');
-        }
-    } catch (error) {
-        console.error('上传头像失败:', error);
-        alert('上传头像失败，请重试');
-    }
-}
-
-// 检测是否在Android WebView中
-function isAndroidWebView() {
-    const ua = navigator.userAgent.toLowerCase();
-    return ua.indexOf('wv') >= 0 || window.AndroidBridge !== undefined;
-}
-
-// 通知测试功能
-function testNotification() {
-    console.log('🧪 正在测试通知功能...');
-    
-    // 检查是否在WebView中
-    if (isAndroidWebView()) {
-        console.log('📱 检测到Android WebView环境');
-    }
-    
-    // 优先使用Android原生通知
-    if (window.AndroidBridge && typeof window.AndroidBridge.showNotification === 'function') {
-        console.log('📱 使用Android原生通知测试');
-        window.AndroidBridge.showNotification('家庭聊天 - 测试通知', '✅ Android原生通知正常工作！');
-        alert('✅ 已发出Android原生通知，请检查通知栏！');
-        return;
-    }
-    
-    if (!('Notification' in window)) {
-        showBrowserCompatibilityTip();
-        return;
-    }
-    
-    if (Notification.permission === 'granted') {
-        // 权限已授予，显示测试通知
-        try {
-            const notification = new Notification('家庭聊天 - 测试通知', {
-                body: '✅ 通知功能正常工作！',
-                icon: '/static/icon.svg',
-                vibrate: [200, 100, 200, 100, 200],
-                tag: 'family-chat-test'
-            });
-            
-            notification.onclick = function() {
-                window.focus();
-                notification.close();
-            };
-            
-            console.log('✅ 测试通知已发出');
-            alert('✅ 测试通知已发出，请检查通知栏！');
-        } catch (e) {
-            console.error('❌ 显示测试通知失败:', e);
-            alert('无法显示通知，请检查权限或尝试使用其他浏览器');
-        }
-    } else if (Notification.permission === 'default') {
-        // 权限未设置，请求权限
-        console.log('🔔 请求通知权限...');
-        Notification.requestPermission().then(permission => {
-            if (permission === 'granted') {
-                alert('✅ 通知权限已开启！再次点击测试通知按钮测试');
-            } else {
-                showPermissionHelpTip();
-            }
-        });
-    } else {
-        // 权限被拒绝
-        showPermissionHelpTip();
-    }
-}
-
-// 显示浏览器兼容性提示
-function showBrowserCompatibilityTip() {
-    const browserTip = `
-⚠️ 您的浏览器不支持通知功能！
-
-📱 建议解决方案：
-
-方案一（推荐）：
-使用我们的Android APP
-- 自动处理通知权限
-- 功能更完整
-
-方案二：
-更换浏览器（推荐）：
-• Chrome 浏览器
-• Edge 浏览器
-• Firefox 浏览器
-
-方案三：
-继续使用，聊天功能仍然正常
-只是无法收到后台通知
-`;
-    alert(browserTip);
-}
-
-// 显示权限帮助提示
-function showPermissionHelpTip() {
-    const helpTip = `
-🔔 通知权限设置帮助
-
-在系统设置中开启：
-1. 打开手机"设置"
-2. 找到"应用"或"应用管理"
-3. 找到当前APP/浏览器
-4. 打开"通知权限"
-5. 允许显示通知
-
-开启后刷新页面重试！
-`;
-    alert(helpTip);
-}
-
-// 检查并显示通知权限状态
-function checkNotificationPermission() {
-    if (!('Notification' in window)) {
-        return '不支持';
-    }
-    const status = Notification.permission;
-    console.log('📱 通知权限状态:', status);
-    return status;
-}
-
-// 主动请求通知权限
-function requestNotificationPermissionManually() {
-    if (!('Notification' in window)) {
-        alert('您的浏览器不支持通知功能');
-        return;
-    }
-    
-    Notification.requestPermission().then(permission => {
-        if (permission === 'granted') {
-            console.log('✅ 通知权限已授予');
-        }
-    });
 }
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -1161,4 +1915,15 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('friend-profile-modal').addEventListener('click', function(e) {
         if (e.target === this) closeFriendProfile();
     });
-};
+
+    window.addEventListener('resize', function() {
+        handleResize();
+    });
+
+    if (isMobile() && !currentFriendId) {
+        const sidebar = document.querySelector('.sidebar');
+        const chatArea = document.querySelector('.chat-area');
+        if (sidebar) sidebar.style.display = 'flex';
+        if (chatArea) chatArea.style.display = 'none';
+    }
+});

@@ -1,7 +1,7 @@
 {
   "name": "家庭聊天",
   "short_name": "家庭聊天",
-  "description": "家庭聊天应用 - 支持消息通知",
+  "description": "家庭聊天 v2.0 - 支持语音消息、视频通话、语音通话",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#ededed",

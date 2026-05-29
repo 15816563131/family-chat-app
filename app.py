@@ -13,7 +13,7 @@ app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'family-chat-secret-key-
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///family_chat.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'uploads')
-app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024  # 5MB
+app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024  # 20MB (支持语音文件)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
@@ -71,6 +71,7 @@ class Message(db.Model):
     sender_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     receiver_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     content = db.Column(db.Text, nullable=False)
+    msg_type = db.Column(db.String(10), default='text')
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     read = db.Column(db.Boolean, default=False)
 
@@ -97,7 +98,7 @@ def service_worker():
     return send_file('static/sw.js', mimetype='application/javascript')
 
 
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp', 'webm', 'mp3', 'ogg', 'wav', 'amr'}
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -129,6 +130,25 @@ def upload_avatar(user_id):
     db.session.commit()
     
     return jsonify({'message': '头像上传成功', 'avatar_url': avatar_url}), 200
+
+
+@app.route('/api/voice/upload', methods=['POST'])
+def upload_voice():
+    if 'audio' not in request.files:
+        return jsonify({'error': '没有上传文件'}), 400
+    sender_id = request.form.get('sender_id', type=int)
+    if not sender_id:
+        return jsonify({'error': '缺少发送者ID'}), 400
+    file = request.files['audio']
+    if file.filename == '':
+        return jsonify({'error': '未选择文件'}), 400
+    ext = 'webm'
+    filename = f'voice_{sender_id}_{int(datetime.utcnow().timestamp())}.{ext}'
+    filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    file.save(filepath)
+    voice_url = f'/static/uploads/{filename}'
+    logger.info(f'Voice file saved: {filename}')
+    return jsonify({'url': voice_url, 'duration': 0}), 200
 
 
 @app.route('/api/avatar/<int:user_id>')
@@ -514,8 +534,14 @@ def handle_send_message(data):
         sender_id = data.get('sender_id')
         receiver_id = data.get('receiver_id')
         content = data.get('content')
+        msg_type = data.get('msg_type', 'text')
+        voice_url = data.get('voice_url', '')
+        voice_duration = data.get('voice_duration', 0)
         
-        if not sender_id or not receiver_id or not content:
+        if not sender_id or not receiver_id:
+            return
+        
+        if msg_type == 'text' and not content:
             return
         
         is_blocked = Blacklist.query.filter_by(user_id=receiver_id, blocked_user_id=sender_id).first()
@@ -523,7 +549,7 @@ def handle_send_message(data):
             emit('message_failed', {'error': '对方已拉黑你'}, room=str(sender_id))
             return
         
-        message = Message(sender_id=sender_id, receiver_id=receiver_id, content=content)
+        message = Message(sender_id=sender_id, receiver_id=receiver_id, content=content, msg_type=msg_type)
         db.session.add(message)
         db.session.commit()
         
@@ -535,6 +561,9 @@ def handle_send_message(data):
             'receiver_id': receiver_id,
             'sender_name': sender.username if sender else 'Unknown',
             'content': content,
+            'msg_type': msg_type,
+            'voice_url': voice_url,
+            'voice_duration': voice_duration,
             'timestamp': message.timestamp.isoformat(),
             'is_mine': False
         }
@@ -547,6 +576,53 @@ def handle_send_message(data):
     except Exception as e:
         logger.error(f'Sending message failed: {e}')
         db.session.rollback()
+
+
+@socketio.on('webrtc_offer')
+def handle_webrtc_offer(data):
+    target = data.get('to')
+    if target and data.get('sdp'):
+        emit('webrtc_offer', {
+            'from': data.get('from'),
+            'sdp': data.get('sdp'),
+            'call_type': data.get('call_type', 'video')
+        }, room=str(target))
+
+@socketio.on('webrtc_answer')
+def handle_webrtc_answer(data):
+    target = data.get('to')
+    if target and data.get('sdp'):
+        emit('webrtc_answer', {
+            'from': data.get('from'),
+            'sdp': data.get('sdp')
+        }, room=str(target))
+
+@socketio.on('webrtc_ice_candidate')
+def handle_webrtc_ice(data):
+    target = data.get('to')
+    if target and data.get('candidate'):
+        emit('webrtc_ice_candidate', {
+            'from': data.get('from'),
+            'candidate': data.get('candidate')
+        }, room=str(target))
+
+@socketio.on('webrtc_reject')
+def handle_webrtc_reject(data):
+    target = data.get('to')
+    if target:
+        emit('webrtc_reject', {'from': data.get('from')}, room=str(target))
+
+@socketio.on('webrtc_end_call')
+def handle_webrtc_end_call(data):
+    target = data.get('to')
+    if target:
+        emit('webrtc_end_call', {'from': data.get('from')}, room=str(target))
+
+@socketio.on('webrtc_busy')
+def handle_webrtc_busy(data):
+    target = data.get('to')
+    if target:
+        emit('webrtc_busy', {'from': data.get('from')}, room=str(target))
 
 
 if __name__ == '__main__':
