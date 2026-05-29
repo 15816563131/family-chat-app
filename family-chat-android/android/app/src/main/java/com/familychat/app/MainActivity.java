@@ -20,7 +20,6 @@ import android.os.PowerManager;
 import android.provider.Settings;
 import android.telephony.SmsManager;
 import android.util.Log;
-import android.view.View;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
@@ -40,8 +39,8 @@ public class MainActivity extends Activity {
     private Handler keepAliveHandler;
     private Runnable keepAliveRunnable;
     private boolean isForeground = true;
+    private boolean keepAliveRunning = false;
     private static final String WEB_URL = "https://family-chat-app-production-93b6.up.railway.app";
-    private static final int NOTIFICATION_PERMISSION_CODE = 1001;
     private static final int POST_NOTIFICATIONS_REQUEST_CODE = 1002;
     private static final int SMS_PERMISSION_REQUEST_CODE = 1003;
     private static final int BATTERY_OPTIMIZATION_REQUEST_CODE = 1004;
@@ -63,6 +62,24 @@ public class MainActivity extends Activity {
         createForegroundChannel();
 
         webView = findViewById(R.id.webView);
+        setupWebView();
+        webView.loadUrl(WEB_URL);
+
+        PowerManager powerManager = (PowerManager) getSystemService(POWER_SERVICE);
+        if (powerManager != null) {
+            wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "FamilyChat:WebViewKeepAlive");
+            wakeLock.acquire(30 * 60 * 1000L);
+            Log.d(TAG, "WakeLock acquired (30min)");
+        }
+
+        startKeepAlive();
+        requestNotificationPermission();
+        requestAllPermissions();
+    }
+
+    @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
+    private void setupWebView() {
+        if (webView == null) return;
 
         WebSettings webSettings = webView.getSettings();
         webSettings.setJavaScriptEnabled(true);
@@ -82,7 +99,6 @@ public class MainActivity extends Activity {
         }
 
         webView.addJavascriptInterface(new WebAppInterface(), "AndroidBridge");
-
         webView.setWebChromeClient(new WebChromeClient());
 
         webView.setWebViewClient(new WebViewClient() {
@@ -100,60 +116,61 @@ public class MainActivity extends Activity {
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 Log.d(TAG, "Page loaded: " + url);
+                if (view == null || isFinishing() || isDestroyed()) return;
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     requestNotificationPermissionDelayed();
                 }
-                view.resumeTimers();
+                try { view.resumeTimers(); } catch (Exception e) {}
 
-                view.evaluateJavascript(
-                    "(function() {" +
-                    "  try {" +
-                    "    var saved = localStorage.getItem('currentUser');" +
-                    "    if (saved) {" +
-                    "      var user = JSON.parse(saved);" +
-                    "      if (user && user.id && window.AndroidBridge && window.AndroidBridge.setUserId) {" +
-                    "        window.AndroidBridge.setUserId(user.id);" +
-                    "      }" +
-                    "    }" +
-                    "  } catch(e) {}" +
-                    "})();",
-                    null
-                );
-            }
-        });
-
-        webView.loadUrl(WEB_URL);
-
-        PowerManager powerManager = (PowerManager) getSystemService(POWER_SERVICE);
-        if (powerManager != null) {
-            wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "FamilyChat:WebViewKeepAlive");
-            wakeLock.acquire();
-            Log.d(TAG, "WakeLock acquired");
-        }
-
-        startKeepAlive();
-
-        requestNotificationPermission();
-        requestAllPermissions();
-
-        new Handler(Looper.getMainLooper()).postDelayed(() -> {
-            if (!WEB_URL.equals(webView.getUrl())) {
-                if (webView.getUrl() == null || webView.getUrl().equals("about:blank")) {
-                    showConnectionErrorDialog();
+                try {
+                    view.evaluateJavascript(
+                        "(function() {" +
+                        "  try {" +
+                        "    var saved = localStorage.getItem('currentUser');" +
+                        "    if (saved) {" +
+                        "      var user = JSON.parse(saved);" +
+                        "      if (user && user.id && window.AndroidBridge && window.AndroidBridge.setUserId) {" +
+                        "        window.AndroidBridge.setUserId(user.id);" +
+                        "      }" +
+                        "    }" +
+                        "  } catch(e) {}" +
+                        "})();",
+                        null
+                    );
+                } catch (Exception e) {
+                    Log.w(TAG, "evaluateJavascript failed", e);
                 }
             }
-        }, 15000);
+
+            @Override
+            public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
+                super.onReceivedError(view, errorCode, description, failingUrl);
+                Log.e(TAG, "WebView error: " + errorCode + " - " + description + " [" + failingUrl + "]");
+                if (view == null || isFinishing() || isDestroyed()) return;
+                if (errorCode == ERROR_HOST_LOOKUP || errorCode == ERROR_CONNECT || errorCode == ERROR_TIMEOUT) {
+                    runOnUiThread(() -> {
+                        if (isFinishing() || isDestroyed()) return;
+                        try { view.reload(); } catch (Exception e2) {}
+                    });
+                }
+            }
+        });
     }
 
     private void startKeepAlive() {
+        if (keepAliveRunning) return;
+        keepAliveRunning = true;
         keepAliveHandler = new Handler(Looper.getMainLooper());
         keepAliveRunnable = new Runnable() {
             @Override
             public void run() {
+                if (!keepAliveRunning || isFinishing() || isDestroyed()) {
+                    keepAliveRunning = false;
+                    return;
+                }
                 if (webView != null) {
                     try {
                         webView.resumeTimers();
-                        Log.d(TAG, "KeepAlive: WebView timers resumed");
                     } catch (Exception e) {
                         Log.w(TAG, "KeepAlive error", e);
                     }
@@ -168,9 +185,13 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         isForeground = true;
-        if (webView != null) {
-            webView.onResume();
-            webView.resumeTimers();
+        if (webView != null && !isFinishing() && !isDestroyed()) {
+            try {
+                webView.onResume();
+                webView.resumeTimers();
+            } catch (Exception e) {
+                Log.w(TAG, "onResume error", e);
+            }
         }
     }
 
@@ -178,25 +199,41 @@ public class MainActivity extends Activity {
     protected void onPause() {
         super.onPause();
         isForeground = false;
-        if (webView != null) {
-            webView.onPause();
-            webView.resumeTimers();
+        if (webView != null && !isFinishing() && !isDestroyed()) {
+            try {
+                webView.onPause();
+                webView.resumeTimers();
+            } catch (Exception e) {
+                Log.w(TAG, "onPause error", e);
+            }
         }
     }
 
     @Override
     protected void onDestroy() {
-        super.onDestroy();
-        if (pollService != null) {
-            pollService.stopPolling();
-        }
+        keepAliveRunning = false;
         if (keepAliveHandler != null && keepAliveRunnable != null) {
             keepAliveHandler.removeCallbacks(keepAliveRunnable);
+        }
+        keepAliveHandler = null;
+        keepAliveRunnable = null;
+
+        if (pollService != null) {
+            pollService.stopPolling();
         }
         if (wakeLock != null && wakeLock.isHeld()) {
             wakeLock.release();
             Log.d(TAG, "WakeLock released");
         }
+
+        if (webView != null) {
+            try {
+                webView.destroy();
+            } catch (Exception e) {}
+            webView = null;
+        }
+
+        super.onDestroy();
         Log.d(TAG, "Activity destroyed");
     }
 
@@ -344,7 +381,11 @@ public class MainActivity extends Activity {
             intent.setAction(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
             intent.setData(Uri.parse("package:" + getPackageName()));
             if (intent.resolveActivity(getPackageManager()) != null) {
-                startActivityForResult(intent, BATTERY_OPTIMIZATION_REQUEST_CODE);
+                try {
+                    startActivityForResult(intent, BATTERY_OPTIMIZATION_REQUEST_CODE);
+                } catch (Exception e) {
+                    Log.w(TAG, "Battery opt intent failed", e);
+                }
             }
         }
     }
@@ -354,7 +395,11 @@ public class MainActivity extends Activity {
             if (!Settings.canDrawOverlays(this)) {
                 Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                         Uri.parse("package:" + getPackageName()));
-                startActivityForResult(intent, OVERLAY_PERMISSION_REQUEST_CODE);
+                try {
+                    startActivityForResult(intent, OVERLAY_PERMISSION_REQUEST_CODE);
+                } catch (Exception e) {
+                    Log.w(TAG, "Overlay intent failed", e);
+                }
             }
         }
     }
@@ -393,12 +438,15 @@ public class MainActivity extends Activity {
     }
 
     private void startForegroundService() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        try {
             Intent serviceIntent = new Intent(this, ForegroundService.class);
-            ContextCompat.startForegroundService(this, serviceIntent);
-        } else {
-            Intent serviceIntent = new Intent(this, ForegroundService.class);
-            startService(serviceIntent);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                ContextCompat.startForegroundService(this, serviceIntent);
+            } else {
+                startService(serviceIntent);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "startForegroundService failed", e);
         }
     }
 
@@ -429,6 +477,7 @@ public class MainActivity extends Activity {
     }
 
     private void showPermissionRationaleDialog() {
+        if (isFinishing() || isDestroyed()) return;
         new AlertDialog.Builder(this)
                 .setTitle("Enable Notifications")
                 .setMessage("Please enable notifications to receive new message alerts.")
@@ -447,6 +496,7 @@ public class MainActivity extends Activity {
     }
 
     private void showSmsPermissionDialog() {
+        if (isFinishing() || isDestroyed()) return;
         new AlertDialog.Builder(this)
                 .setTitle("Enable SMS")
                 .setMessage("SMS permission is needed so your contacts receive SMS notifications when you message them.")
@@ -488,6 +538,7 @@ public class MainActivity extends Activity {
     }
 
     private void showGoToSettingsDialog(String title, String message) {
+        if (isFinishing() || isDestroyed()) return;
         new AlertDialog.Builder(this)
                 .setTitle(title)
                 .setMessage(message)
@@ -533,25 +584,16 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void showConnectionErrorDialog() {
-        runOnUiThread(() -> {
-            new AlertDialog.Builder(this)
-                    .setTitle("Connection Failed")
-                    .setMessage("Cannot connect to server. Check your network.\n\nTap Retry to reload.")
-                    .setPositiveButton("Retry", (dialog, which) -> {
-                        webView.loadUrl(WEB_URL);
-                    })
-                    .setNegativeButton("Cancel", null)
-                    .show();
-        });
-    }
-
     @Override
     public void onBackPressed() {
-        if (webView.canGoBack()) {
-            webView.goBack();
-        } else {
-            super.onBackPressed();
+        if (webView != null) {
+            try {
+                if (webView.canGoBack()) {
+                    webView.goBack();
+                    return;
+                }
+            } catch (Exception e) {}
         }
+        super.onBackPressed();
     }
 }
