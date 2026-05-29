@@ -82,5 +82,21 @@ family-chat-android/android/.gradle/
 family-chat-android/android/app/build/
 family-chat-android/android/local.properties
 
+# 构建说明文档（临时生成）
+*BUILD_GUIDE*.md
+*构建指南*.md
+*完整方案*.md
+*最终确认*.md
+*立即获取*.md
+*通知问题*.md
+
+# 构建日志
+build-log*.txt
+build-error*.txt
+
+# 源图片文件（非直接使用）
+we-chat-png.png
+
 # 上传的头像文件
 static/uploads/
+static/uploads/*

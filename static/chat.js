@@ -172,8 +172,8 @@ async function loadFriends() {
             const unreadBadge = unreadCount > 0 ? `<span class="unread-badge">${unreadCount > 99 ? '99+' : unreadCount}</span>` : '';
             
             friendElement.innerHTML = `
-                <div class="friend-name">${friend.username}${unreadBadge}</div>
-                <div class="last-message">${friend.last_message || '暂无消息'}</div>
+                <div class="friend-name">${escapeHtml(friend.username)}${unreadBadge}</div>
+                <div class="last-message">${escapeHtml(friend.last_message || '暂无消息')}</div>
             `;
             
             friendsList.appendChild(friendElement);
@@ -199,7 +199,7 @@ async function loadFriendRequests() {
                 const requestElement = document.createElement('div');
                 requestElement.className = 'friend-request-item';
                 requestElement.innerHTML = `
-                    <span>${req.sender_username}</span>
+                    <span>${escapeHtml(req.sender_username)}</span>
                     <div>
                         <button class="accept-btn" onclick="handleFriendRequest(${req.id}, 'accept')">同意</button>
                         <button class="reject-btn" onclick="handleFriendRequest(${req.id}, 'reject')">拒绝</button>
@@ -266,7 +266,7 @@ async function searchUsers() {
             const userElement = document.createElement('div');
             userElement.className = 'search-result-item';
             userElement.innerHTML = `
-                <span>${user.username}</span>
+                <span>${escapeHtml(user.username)}</span>
                 <button onclick="sendFriendRequest(${user.id})">添加</button>
             `;
             resultsContainer.appendChild(userElement);
@@ -388,6 +388,7 @@ function getAvatarInitial(name) {
 }
 
 function escapeHtml(text) {
+    if (!text) return '';
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
@@ -768,8 +769,8 @@ async function loadContacts() {
             const contactElement = document.createElement('div');
             contactElement.className = 'contact-item';
             contactElement.innerHTML = `
-                <span class="contact-item-name">${friend.username}</span>
-                <button class="contact-btn" onclick="selectFriendFromContacts(${friend.id}, '${friend.username}')">发起聊天</button>
+                <span class="contact-item-name">${escapeHtml(friend.username)}</span>
+                <button class="contact-btn" onclick="selectFriendFromContacts(${friend.id}, '${escapeHtml(friend.username)}')">发起聊天</button>
             `;
             contactsList.appendChild(contactElement);
         });
@@ -808,7 +809,7 @@ async function loadBlacklist() {
             const itemElement = document.createElement('div');
             itemElement.className = 'blacklist-item';
             itemElement.innerHTML = `
-                <span class="blacklist-item-name">${item.blocked_user_name}</span>
+                <span class="blacklist-item-name">${escapeHtml(item.blocked_user_name)}</span>
                 <button class="unblock-btn" onclick="unblockUser(${item.blocked_user_id})">移除</button>
             `;
             blacklistList.appendChild(itemElement);
@@ -1137,7 +1138,7 @@ function requestNotificationPermissionManually() {
     });
 }
 
-window.onload = function() {
+document.addEventListener('DOMContentLoaded', function() {
     const savedUser = localStorage.getItem('currentUser');
     if (savedUser) {
         currentUser = JSON.parse(savedUser);

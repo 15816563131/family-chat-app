@@ -5,6 +5,7 @@ from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
 import os
+import logging
 
 app = Flask(__name__)
 
@@ -13,6 +14,9 @@ app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:/
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'uploads')
 app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024  # 5MB
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+logger = logging.getLogger(__name__)
 
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
@@ -481,12 +485,12 @@ def get_recent_messages(user_id):
 
 @socketio.on('connect')
 def handle_connect():
-    print('Client connected')
+    logger.info('Client connected')
 
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    print('Client disconnected')
+    logger.info('Client disconnected')
 
 
 @socketio.on('join')
@@ -494,7 +498,7 @@ def on_join(data):
     user_id = data.get('user_id')
     if user_id:
         join_room(str(user_id))
-        print(f'User {user_id} joined room {user_id}')
+        logger.info(f'User {user_id} joined room {user_id}')
 
 
 @socketio.on('leave')
@@ -541,7 +545,7 @@ def handle_send_message(data):
         emit('receive_message', message_data, room=str(sender_id))
         
     except Exception as e:
-        print(f'sending message failed: {e}')
+        logger.error(f'Sending message failed: {e}')
         db.session.rollback()
 
 
@@ -551,9 +555,9 @@ if __name__ == '__main__':
     with app.app_context():
         db.create_all()
     
-    print('=' * 50)
-    print('family chat app start...')
-    print(f'access url: http://localhost:{port}')
-    print('=' * 50)
+    logger.info('=' * 50)
+    logger.info('Family chat app starting...')
+    logger.info(f'Access URL: http://localhost:{port}')
+    logger.info('=' * 50)
     
     socketio.run(app, host='0.0.0.0', port=port, debug=False, use_reloader=False, allow_unsafe_werkzeug=True)
