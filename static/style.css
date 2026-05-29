@@ -123,7 +123,7 @@
     background: rgba(0,0,0,0.05);
 }
 
-* {body {
+body {
     font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', Arial, sans-serif;
     background: var(--wechat-bg);
     min-height: 100vh;

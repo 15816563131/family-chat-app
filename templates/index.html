@@ -187,11 +187,32 @@
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
     <script src="/static/chat.js"></script>
     <script>
-        // PWA Service Worker 注册
+        // ===== 清除旧的Service Worker =====
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('/static/sw.js')
-                .then(reg => console.log('Service Worker 注册成功'))
-                .catch(err => console.log('Service Worker 注册失败:', err));
+            navigator.serviceWorker.getRegistrations().then(function(registrations) {
+                for (var i = 0; i < registrations.length; i++) {
+                    registrations[i].unregister();
+                    console.log('旧Service Worker已注销');
+                }
+                // 清除所有缓存
+                if ('caches' in window) {
+                    caches.keys().then(function(names) {
+                        for (var j = 0; j < names.length; j++) {
+                            caches.delete(names[j]);
+                            console.log('缓存已清除:', names[j]);
+                        }
+                    });
+                }
+                // 注册全新的SW（不拦截请求）
+                navigator.serviceWorker.register('/static/sw.js', { scope: '/' })
+                    .then(function(reg) {
+                        console.log('新Service Worker注册成功');
+                        reg.update();
+                    })
+                    .catch(function(err) {
+                        console.log('Service Worker注册（可忽略）:', err);
+                    });
+            });
         }
         
         // 请求通知权限 - 更积极主动
