@@ -119,19 +119,25 @@ public class MainActivity extends Activity {
                     }
                 }
                 
+                final boolean needsCamera = wantsCamera;
+                final boolean needsAudio = wantsAudio;
+                
                 boolean hasCameraPerm = ContextCompat.checkSelfPermission(MainActivity.this,
                         Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED;
                 boolean hasAudioPerm = ContextCompat.checkSelfPermission(MainActivity.this,
                         Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
                 
-                if ((wantsCamera && !hasCameraPerm) || (wantsAudio && !hasAudioPerm)) {
+                final boolean cameraGranted = hasCameraPerm;
+                final boolean audioGranted = hasAudioPerm;
+                
+                if ((needsCamera && !cameraGranted) || (needsAudio && !audioGranted)) {
                     Log.d(TAG, "Android runtime permissions not yet granted, requesting...");
                     request.deny();
                     runOnUiThread(() -> {
-                        if (wantsCamera && !hasCameraPerm) {
+                        if (needsCamera && !cameraGranted) {
                             requestCameraPermission();
                         }
-                        if (wantsAudio && !hasAudioPerm) {
+                        if (needsAudio && !audioGranted) {
                             requestAudioPermission();
                         }
                     });
