@@ -335,6 +335,54 @@ function handleResize() {
     }
 }
 
+// ===== Android 权限请求 (通话前自动索要摄像头/麦克风) =====
+function ensureMediaPermissions(needVideo) {
+    return new Promise(function(resolve, reject) {
+        if (typeof AndroidBridge !== 'undefined' && AndroidBridge) {
+            var hasCamera = needVideo ? AndroidBridge.hasCameraPermission() : true;
+            var hasAudio = AndroidBridge.hasAudioPermission();
+            
+            if (hasCamera && hasAudio) {
+                resolve();
+                return;
+            }
+            
+            document.getElementById('voice-status').textContent = '⏳ 请求权限中...';
+            
+            window.onCameraPermissionResult = function(granted) {
+                if (!granted) {
+                    document.getElementById('voice-status').textContent = '❌ 摄像头权限被拒绝';
+                    reject(new Error('Camera permission denied'));
+                    return;
+                }
+                window.onAudioPermissionResult = function(audioGranted) {
+                    if (!audioGranted) {
+                        document.getElementById('voice-status').textContent = '❌ 麦克风权限被拒绝';
+                        reject(new Error('Audio permission denied'));
+                        return;
+                    }
+                    document.getElementById('voice-status').textContent = '';
+                    resolve();
+                };
+                if (!hasAudio) AndroidBridge.requestAudioPermission();
+                else {
+                    document.getElementById('voice-status').textContent = '';
+                    resolve();
+                }
+            };
+            
+            if (!hasCamera && needVideo) AndroidBridge.requestCameraPermission();
+            else if (!hasAudio) AndroidBridge.requestAudioPermission();
+            else {
+                document.getElementById('voice-status').textContent = '';
+                resolve();
+            }
+        } else {
+            resolve();
+        }
+    });
+}
+
 // ===== WebRTC 通话 =====
 const RTC_CONFIG = {
     iceServers: [
@@ -358,64 +406,69 @@ function startCall(type) {
     callType = type;
     isCallInitiator = true;
     
-    showCallOverlay();
-    document.getElementById('incoming-call').style.display = 'flex';
-    document.getElementById('active-call').style.display = 'none';
-    document.getElementById('caller-name').textContent = '正在呼叫 ' + (currentFriendInfo ? currentFriendInfo.username : '...');
-    document.getElementById('call-type-label').textContent = type === 'video' ? '📹 视频通话' : '🎵 语音通话';
-    document.getElementById('caller-avatar').textContent = getAvatarInitial(currentFriendInfo ? currentFriendInfo.username : '');
-    
-    document.querySelector('.accept-call-btn').style.display = 'none';
-    document.querySelector('.reject-call-btn').textContent = '📞';
-    
-    playRingtone();
-    
-    navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: type === 'video'
-    })
-    .then(function(stream) {
-        localStream = stream;
-        const localVideo = document.getElementById('local-video');
-        localVideo.srcObject = stream;
+    ensureMediaPermissions(type === 'video').then(function() {
+        showCallOverlay();
+        document.getElementById('incoming-call').style.display = 'flex';
+        document.getElementById('active-call').style.display = 'none';
+        document.getElementById('caller-name').textContent = '正在呼叫 ' + (currentFriendInfo ? currentFriendInfo.username : '...');
+        document.getElementById('call-type-label').textContent = type === 'video' ? '📹 视频通话' : '🎵 语音通话';
+        document.getElementById('caller-avatar').textContent = getAvatarInitial(currentFriendInfo ? currentFriendInfo.username : '');
         
-        if (type === 'audio') {
-            localVideo.style.display = 'none';
-        } else {
-            localVideo.style.display = 'block';
-        }
+        document.querySelector('.accept-call-btn').style.display = 'none';
+        document.querySelector('.reject-call-btn').textContent = '📞';
         
-        createPeerConnection();
+        playRingtone();
         
-        localStream.getTracks().forEach(function(track) {
-            if (localStream) {
-                peerConnection.addTrack(track, localStream);
+        navigator.mediaDevices.getUserMedia({
+            audio: true,
+            video: type === 'video'
+        })
+        .then(function(stream) {
+            localStream = stream;
+            const localVideo = document.getElementById('local-video');
+            localVideo.srcObject = stream;
+            
+            if (type === 'audio') {
+                localVideo.style.display = 'none';
+            } else {
+                localVideo.style.display = 'block';
             }
-        });
-        
-        peerConnection.createOffer()
-            .then(function(offer) {
-                return peerConnection.setLocalDescription(offer);
-            })
-            .then(function() {
-                if (socket && isConnected) {
-                    socket.emit('webrtc_offer', {
-                        from: currentUser.id,
-                        to: currentFriendId,
-                        sdp: peerConnection.localDescription,
-                        call_type: type
-                    });
+            
+            createPeerConnection();
+            
+            localStream.getTracks().forEach(function(track) {
+                if (localStream) {
+                    peerConnection.addTrack(track, localStream);
                 }
-            })
-            .catch(function(error) {
-                console.error('创建Offer失败:', error);
-                endCall();
             });
-    })
-    .catch(function(error) {
-        console.error('获取媒体设备失败:', error);
-        endCall();
-        alert('无法访问摄像头/麦克风');
+            
+            peerConnection.createOffer()
+                .then(function(offer) {
+                    return peerConnection.setLocalDescription(offer);
+                })
+                .then(function() {
+                    if (socket && isConnected) {
+                        socket.emit('webrtc_offer', {
+                            from: currentUser.id,
+                            to: currentFriendId,
+                            sdp: peerConnection.localDescription,
+                            call_type: type
+                        });
+                    }
+                })
+                .catch(function(error) {
+                    console.error('创建Offer失败:', error);
+                    endCall();
+                });
+        })
+        .catch(function(error) {
+            console.error('获取媒体设备失败:', error);
+            endCall();
+            alert('无法访问摄像头/麦克风');
+        });
+    }).catch(function(error) {
+        console.error('权限请求失败:', error);
+        alert('需要摄像头/麦克风权限才能通话，请先在系统设置中开启');
     });
 }
 
@@ -450,64 +503,70 @@ function createPeerConnection() {
 function acceptCall() {
     if (!pendingOffer) return;
     
-    stopRingtone();
-    document.getElementById('incoming-call').style.display = 'none';
-    document.getElementById('active-call').style.display = 'flex';
-    
-    playCallConnectSound();
-    
-    navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: pendingOffer.call_type === 'video'
-    })
-    .then(function(stream) {
-        localStream = stream;
-        const localVideo = document.getElementById('local-video');
-        localVideo.srcObject = stream;
+    ensureMediaPermissions(pendingOffer.call_type === 'video').then(function() {
+        stopRingtone();
+        document.getElementById('incoming-call').style.display = 'none';
+        document.getElementById('active-call').style.display = 'flex';
         
-        if (pendingOffer.call_type === 'audio') {
-            localVideo.style.display = 'none';
-        } else {
-            localVideo.style.display = 'block';
-        }
+        playCallConnectSound();
         
-        callType = pendingOffer.call_type;
-        createPeerConnection();
-        
-        localStream.getTracks().forEach(function(track) {
-            if (localStream) {
-                peerConnection.addTrack(track, localStream);
+        navigator.mediaDevices.getUserMedia({
+            audio: true,
+            video: pendingOffer.call_type === 'video'
+        })
+        .then(function(stream) {
+            localStream = stream;
+            const localVideo = document.getElementById('local-video');
+            localVideo.srcObject = stream;
+            
+            if (pendingOffer.call_type === 'audio') {
+                localVideo.style.display = 'none';
+            } else {
+                localVideo.style.display = 'block';
             }
+            
+            callType = pendingOffer.call_type;
+            createPeerConnection();
+            
+            localStream.getTracks().forEach(function(track) {
+                if (localStream) {
+                    peerConnection.addTrack(track, localStream);
+                }
+            });
+            
+            peerConnection.setRemoteDescription(new RTCSessionDescription(pendingOffer.sdp))
+                .then(function() {
+                    return peerConnection.createAnswer();
+                })
+                .then(function(answer) {
+                    return peerConnection.setLocalDescription(answer);
+                })
+                .then(function() {
+                    if (socket && isConnected) {
+                        socket.emit('webrtc_answer', {
+                            from: currentUser.id,
+                            to: pendingOffer.from,
+                            sdp: peerConnection.localDescription
+                        });
+                    }
+                    isCallActive = true;
+                })
+                .catch(function(error) {
+                    console.error('接听通话失败:', error);
+                    endCall();
+                });
+        })
+        .catch(function(error) {
+            console.error('获取媒体设备失败:', error);
+            endCall();
         });
         
-        peerConnection.setRemoteDescription(new RTCSessionDescription(pendingOffer.sdp))
-            .then(function() {
-                return peerConnection.createAnswer();
-            })
-            .then(function(answer) {
-                return peerConnection.setLocalDescription(answer);
-            })
-            .then(function() {
-                if (socket && isConnected) {
-                    socket.emit('webrtc_answer', {
-                        from: currentUser.id,
-                        to: pendingOffer.from,
-                        sdp: peerConnection.localDescription
-                    });
-                }
-                isCallActive = true;
-            })
-            .catch(function(error) {
-                console.error('接听通话失败:', error);
-                endCall();
-            });
-    })
-    .catch(function(error) {
-        console.error('获取媒体设备失败:', error);
-        endCall();
+        pendingOffer = null;
+    }).catch(function(error) {
+        console.error('权限请求失败:', error);
+        rejectCall();
+        alert('需要摄像头/麦克风权限才能接听通话');
     });
-    
-    pendingOffer = null;
 }
 
 function rejectCall() {
