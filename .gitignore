@@ -81,6 +81,8 @@ download-android-studio.ps1
 family-chat-android/android/.gradle/
 family-chat-android/android/app/build/
 family-chat-android/android/local.properties
+family-chat-android/android/bin/
+family-chat-android/android/conf/
 
 # 构建说明文档（临时生成）
 *BUILD_GUIDE*.md
