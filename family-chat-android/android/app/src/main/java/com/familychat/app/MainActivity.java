@@ -45,10 +45,14 @@ public class MainActivity extends Activity {
     private static final int SMS_PERMISSION_REQUEST_CODE = 1003;
     private static final int BATTERY_OPTIMIZATION_REQUEST_CODE = 1004;
     private static final int OVERLAY_PERMISSION_REQUEST_CODE = 1005;
+    private static final int CAMERA_PERMISSION_REQUEST_CODE = 1006;
+    private static final int AUDIO_PERMISSION_REQUEST_CODE = 1007;
     private static final String CHANNEL_ID = "family_chat_channel";
     private static final String FOREGROUND_CHANNEL_ID = "family_chat_foreground";
+    private static final String CALL_CHANNEL_ID = "family_chat_calls";
     private static final String TAG = "FamilyChat";
     private int notificationId = 1;
+    private boolean isInCall = false;
 
     @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface", "WakelockTimeout"})
     @Override
@@ -245,6 +249,24 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public void showCallNotification(String callerName, String callType) {
+            Log.d(TAG, "JS call notification from: " + callerName + " type: " + callType);
+            showIncomingCallNotification(callerName, callType);
+        }
+
+        @JavascriptInterface
+        public void showVoiceMessageNotification(String senderName) {
+            Log.d(TAG, "JS voice message from: " + senderName);
+            showAndroidNotification(senderName, "收到一条语音消息");
+        }
+
+        @JavascriptInterface
+        public void setInCallState(boolean inCall) {
+            isInCall = inCall;
+            Log.d(TAG, "In call state: " + inCall);
+        }
+
+        @JavascriptInterface
         public boolean hasNotificationPermission() {
             return checkNotificationPermission();
         }
@@ -252,6 +274,38 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void requestAndroidNotificationPermission() {
             runOnUiThread(() -> requestNotificationPermission());
+        }
+
+        @JavascriptInterface
+        public boolean hasCameraPermission() {
+            return checkCameraPermission();
+        }
+
+        @JavascriptInterface
+        public boolean hasAudioPermission() {
+            return checkAudioPermission();
+        }
+
+        @JavascriptInterface
+        public void requestCameraPermission() {
+            runOnUiThread(() -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    ActivityCompat.requestPermissions(MainActivity.this,
+                            new String[]{Manifest.permission.CAMERA},
+                            CAMERA_PERMISSION_REQUEST_CODE);
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public void requestAudioPermission() {
+            runOnUiThread(() -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    ActivityCompat.requestPermissions(MainActivity.this,
+                            new String[]{Manifest.permission.RECORD_AUDIO},
+                            AUDIO_PERMISSION_REQUEST_CODE);
+                }
+            });
         }
 
         @JavascriptInterface
@@ -305,6 +359,27 @@ public class MainActivity extends Activity {
                 Log.d(TAG, "Notification channel created with HIGH importance");
             }
         }
+        createCallNotificationChannel();
+    }
+
+    private void createCallNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel callChannel = new NotificationChannel(
+                    CALL_CHANNEL_ID, "Call Notifications", NotificationManager.IMPORTANCE_HIGH);
+            callChannel.setDescription("Incoming call notifications");
+            callChannel.enableVibration(true);
+            callChannel.enableLights(true);
+            callChannel.setVibrationPattern(new long[]{500, 300, 500, 300});
+            callChannel.setShowBadge(true);
+            callChannel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+            callChannel.setBypassDnd(true);
+            callChannel.setSound(null, null);
+            NotificationManager notificationManager = getSystemService(NotificationManager.class);
+            if (notificationManager != null) {
+                notificationManager.createNotificationChannel(callChannel);
+                Log.d(TAG, "Call notification channel created");
+            }
+        }
     }
 
     private void createForegroundChannel() {
@@ -327,6 +402,16 @@ public class MainActivity extends Activity {
                     == PackageManager.PERMISSION_GRANTED;
         }
         return true;
+    }
+
+    private boolean checkCameraPermission() {
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private boolean checkAudioPermission() {
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+                == PackageManager.PERMISSION_GRANTED;
     }
 
     private boolean checkSmsPermission() {
@@ -534,6 +619,36 @@ public class MainActivity extends Activity {
                             "Please enable SMS permission in Settings so your contacts receive SMS notifications.");
                 }
             }
+        } else if (requestCode == CAMERA_PERMISSION_REQUEST_CODE) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                Toast.makeText(this, "Camera permission enabled!", Toast.LENGTH_SHORT).show();
+                if (webView != null) {
+                    webView.evaluateJavascript(
+                        "(function(){ if(window.onCameraPermissionResult) window.onCameraPermissionResult(true); })();",
+                        null);
+                }
+            } else {
+                if (webView != null) {
+                    webView.evaluateJavascript(
+                        "(function(){ if(window.onCameraPermissionResult) window.onCameraPermissionResult(false); })();",
+                        null);
+                }
+            }
+        } else if (requestCode == AUDIO_PERMISSION_REQUEST_CODE) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                Toast.makeText(this, "Microphone permission enabled!", Toast.LENGTH_SHORT).show();
+                if (webView != null) {
+                    webView.evaluateJavascript(
+                        "(function(){ if(window.onAudioPermissionResult) window.onAudioPermissionResult(true); })();",
+                        null);
+                }
+            } else {
+                if (webView != null) {
+                    webView.evaluateJavascript(
+                        "(function(){ if(window.onAudioPermissionResult) window.onAudioPermissionResult(false); })();",
+                        null);
+                }
+            }
         }
     }
 
@@ -581,6 +696,37 @@ public class MainActivity extends Activity {
             Log.d(TAG, "Android notification shown: " + title);
         } catch (Exception e) {
             Log.e(TAG, "Failed to show notification", e);
+        }
+    }
+
+    private void showIncomingCallNotification(String callerName, String callType) {
+        if (!checkNotificationPermission()) return;
+        try {
+            Intent intent = new Intent(this, MainActivity.class);
+            intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            PendingIntent pendingIntent = PendingIntent.getActivity(this, 9999, intent,
+                    PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+
+            String typeLabel = "video".equals(callType) ? "视频通话" : "语音通话";
+            Notification notification = new NotificationCompat.Builder(this, CALL_CHANNEL_ID)
+                    .setSmallIcon(android.R.drawable.ic_menu_call)
+                    .setContentTitle(callerName)
+                    .setContentText("邀请你进行" + typeLabel)
+                    .setPriority(NotificationCompat.PRIORITY_MAX)
+                    .setCategory(NotificationCompat.CATEGORY_CALL)
+                    .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                    .setContentIntent(pendingIntent)
+                    .setAutoCancel(true)
+                    .setOngoing(true)
+                    .setDefaults(NotificationCompat.DEFAULT_VIBRATE | NotificationCompat.DEFAULT_LIGHTS)
+                    .setFullScreenIntent(pendingIntent, true)
+                    .build();
+
+            NotificationManagerCompat nm = NotificationManagerCompat.from(this);
+            nm.notify(9000, notification);
+            Log.d(TAG, "Call notification shown: " + callerName);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to show call notification", e);
         }
     }
 
