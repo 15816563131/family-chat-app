@@ -14,6 +14,17 @@ const unreadMessages = {};
 let speechRecognition = null;
 let isSpeechRecording = false;
 
+// ===== 语音状态提示（带显示/隐藏，修复：添加 active 类使元素可见） =====
+function showVoiceStatus(text) {
+    var el = document.getElementById('voice-status');
+    if (el) { el.textContent = text; el.classList.add('active'); }
+}
+
+function hideVoiceStatus() {
+    var el = document.getElementById('voice-status');
+    if (el) { el.textContent = ''; el.classList.remove('active'); }
+}
+
 // ===== 语音消息录制 =====
 let mediaRecorder = null;
 let audioChunks = [];
@@ -151,68 +162,79 @@ function playCallEndSound() {
 }
 
 // ===== 语音输入 (Speech-to-Text) =====
-function initSpeechRecognition() {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-        console.log('浏览器不支持语音识别');
-        return false;
-    }
+function createSpeechRecognition() {
+    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return null;
     
-    speechRecognition = new SpeechRecognition();
-    speechRecognition.lang = 'zh-CN';
-    speechRecognition.continuous = false;
-    speechRecognition.interimResults = false;
-    speechRecognition.maxAlternatives = 1;
+    var recog = new SR();
+    recog.lang = 'zh-CN';
+    recog.continuous = false;
+    recog.interimResults = false;
+    recog.maxAlternatives = 1;
     
-    speechRecognition.onresult = function(event) {
-        const transcript = event.results[0][0].transcript;
-        const input = document.getElementById('message-input');
-        input.value = input.value + transcript;
-        document.getElementById('voice-status').textContent = '';
+    recog.onresult = function(event) {
+        var transcript = event.results[0][0].transcript;
+        var input = document.getElementById('message-input');
+        if (input) input.value = input.value + transcript;
+        hideVoiceStatus();
         isSpeechRecording = false;
-        document.getElementById('voice-input-btn').textContent = '🎤';
+        var btn = document.getElementById('voice-input-btn');
+        if (btn) btn.textContent = '🎤';
     };
     
-    speechRecognition.onerror = function(event) {
+    recog.onerror = function(event) {
         console.error('语音识别错误:', event.error);
-        document.getElementById('voice-status').textContent = '语音识别失败: ' + event.error;
+        showVoiceStatus('语音识别失败: ' + event.error);
         isSpeechRecording = false;
-        document.getElementById('voice-input-btn').textContent = '🎤';
+        var btn = document.getElementById('voice-input-btn');
+        if (btn) btn.textContent = '🎤';
+        setTimeout(hideVoiceStatus, 3000);
     };
     
-    speechRecognition.onend = function() {
-        if (isSpeechRecording) {
-            try {
-                speechRecognition.start();
-            } catch (e) {}
-        }
+    recog.onend = function() {
+        isSpeechRecording = false;
+        var btn = document.getElementById('voice-input-btn');
+        if (btn) btn.textContent = '🎤';
     };
     
-    return true;
+    return recog;
 }
 
 function toggleSpeechRecognition() {
-    if (!speechRecognition) {
-        if (!initSpeechRecognition()) {
-            document.getElementById('voice-status').textContent = '浏览器不支持语音识别';
-            return;
-        }
+    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+        showVoiceStatus('您的浏览器不支持语音识别');
+        setTimeout(hideVoiceStatus, 3000);
+        return;
     }
     
     if (isSpeechRecording) {
-        speechRecognition.stop();
-        isSpeechRecording = false;
-        document.getElementById('voice-input-btn').textContent = '🎤';
-        document.getElementById('voice-status').textContent = '';
-    } else {
-        try {
-            speechRecognition.start();
-            isSpeechRecording = true;
-            document.getElementById('voice-input-btn').textContent = '🔴';
-            document.getElementById('voice-status').textContent = '🎙️ 正在聆听...';
-        } catch (e) {
-            console.error('启动语音识别失败:', e);
+        if (speechRecognition) {
+            try { speechRecognition.stop(); } catch (e) {}
         }
+        isSpeechRecording = false;
+        var btn = document.getElementById('voice-input-btn');
+        if (btn) btn.textContent = '🎤';
+        hideVoiceStatus();
+        return;
+    }
+    
+    try {
+        speechRecognition = createSpeechRecognition();
+        if (!speechRecognition) {
+            showVoiceStatus('创建语音识别失败');
+            setTimeout(hideVoiceStatus, 3000);
+            return;
+        }
+        speechRecognition.start();
+        isSpeechRecording = true;
+        var btn = document.getElementById('voice-input-btn');
+        if (btn) btn.textContent = '🔴';
+        showVoiceStatus('🎙️ 正在聆听...');
+    } catch (e) {
+        console.error('启动语音识别失败:', e);
+        showVoiceStatus('启动语音识别失败');
+        setTimeout(hideVoiceStatus, 3000);
     }
 }
 
@@ -242,17 +264,17 @@ function startVoiceRecording() {
                 isAudioRecording = false;
                 isLongPress = false;
                 document.getElementById('voice-input-btn').textContent = '🎤';
-                document.getElementById('voice-status').textContent = '';
+                hideVoiceStatus();
             };
             
             mediaRecorder.start();
             isAudioRecording = true;
             document.getElementById('voice-input-btn').textContent = '🔴';
-            document.getElementById('voice-status').textContent = '🎙️ 录音中... 松开发送';
+            showVoiceStatus('🎙️ 录音中... 松开发送');
         })
         .catch(function(error) {
             console.error('获取麦克风权限失败:', error);
-            document.getElementById('voice-status').textContent = '无法访问麦克风';
+            showVoiceStatus('无法访问麦克风');
         });
 }
 
@@ -264,7 +286,7 @@ function stopVoiceRecording() {
 
 async function sendVoiceMessage(audioBlob) {
     if (!currentFriendId) {
-        document.getElementById('voice-status').textContent = '请先选择聊天对象';
+        showVoiceStatus('请先选择聊天对象');
         return;
     }
     
@@ -291,11 +313,11 @@ async function sendVoiceMessage(audioBlob) {
                 });
             }
         } else {
-            document.getElementById('voice-status').textContent = '语音上传失败';
+            showVoiceStatus('语音上传失败');
         }
     } catch (error) {
         console.error('上传语音失败:', error);
-        document.getElementById('voice-status').textContent = '语音上传失败';
+        showVoiceStatus('语音上传失败');
     }
 }
 
@@ -338,48 +360,61 @@ function handleResize() {
 // ===== Android 权限请求 (通话前自动索要摄像头/麦克风) =====
 function ensureMediaPermissions(needVideo) {
     return new Promise(function(resolve, reject) {
-        if (typeof AndroidBridge !== 'undefined' && AndroidBridge) {
-            var hasCamera = needVideo ? AndroidBridge.hasCameraPermission() : true;
-            var hasAudio = AndroidBridge.hasAudioPermission();
-            
-            if (hasCamera && hasAudio) {
+        if (typeof AndroidBridge === 'undefined' || !AndroidBridge) {
+            resolve();
+            return;
+        }
+        
+        var hasCamera = needVideo ? AndroidBridge.hasCameraPermission() : true;
+        var hasAudio = AndroidBridge.hasAudioPermission();
+        
+        if (hasCamera && hasAudio) {
+            resolve();
+            return;
+        }
+        
+        showVoiceStatus('⏳ 请求权限中...');
+        
+        var cameraDone = !needVideo || hasCamera;
+        var audioDone = hasAudio;
+        var rejected = false;
+        
+        function checkBoth() {
+            if (rejected) return;
+            if (cameraDone && audioDone) {
+                hideVoiceStatus();
                 resolve();
+            }
+        }
+        
+        window.onCameraPermissionResult = function(granted) {
+            if (rejected) return;
+            if (!granted) {
+                rejected = true;
+                showVoiceStatus('❌ 摄像头权限被拒绝');
+                setTimeout(hideVoiceStatus, 3000);
+                reject(new Error('Camera permission denied'));
                 return;
             }
-            
-            document.getElementById('voice-status').textContent = '⏳ 请求权限中...';
-            
-            window.onCameraPermissionResult = function(granted) {
-                if (!granted) {
-                    document.getElementById('voice-status').textContent = '❌ 摄像头权限被拒绝';
-                    reject(new Error('Camera permission denied'));
-                    return;
-                }
-                window.onAudioPermissionResult = function(audioGranted) {
-                    if (!audioGranted) {
-                        document.getElementById('voice-status').textContent = '❌ 麦克风权限被拒绝';
-                        reject(new Error('Audio permission denied'));
-                        return;
-                    }
-                    document.getElementById('voice-status').textContent = '';
-                    resolve();
-                };
-                if (!hasAudio) AndroidBridge.requestAudioPermission();
-                else {
-                    document.getElementById('voice-status').textContent = '';
-                    resolve();
-                }
-            };
-            
-            if (!hasCamera && needVideo) AndroidBridge.requestCameraPermission();
-            else if (!hasAudio) AndroidBridge.requestAudioPermission();
-            else {
-                document.getElementById('voice-status').textContent = '';
-                resolve();
+            cameraDone = true;
+            checkBoth();
+        };
+        
+        window.onAudioPermissionResult = function(granted) {
+            if (rejected) return;
+            if (!granted) {
+                rejected = true;
+                showVoiceStatus('❌ 麦克风权限被拒绝');
+                setTimeout(hideVoiceStatus, 3000);
+                reject(new Error('Audio permission denied'));
+                return;
             }
-        } else {
-            resolve();
-        }
+            audioDone = true;
+            checkBoth();
+        };
+        
+        if (!hasCamera && needVideo) AndroidBridge.requestCameraPermission();
+        if (!hasAudio) AndroidBridge.requestAudioPermission();
     });
 }
 
@@ -464,11 +499,23 @@ function startCall(type) {
         .catch(function(error) {
             console.error('获取媒体设备失败:', error);
             endCall();
-            alert('无法访问摄像头/麦克风');
+            showVoiceStatus('❌ 无法访问摄像头/麦克风');
+            setTimeout(hideVoiceStatus, 3000);
+            if (typeof AndroidBridge !== 'undefined' && AndroidBridge) {
+                AndroidBridge.openAppSettings();
+            } else {
+                alert('无法访问摄像头/麦克风，请在系统设置中开启权限');
+            }
         });
     }).catch(function(error) {
         console.error('权限请求失败:', error);
-        alert('需要摄像头/麦克风权限才能通话，请先在系统设置中开启');
+        showVoiceStatus('❌ 需要摄像头/麦克风权限才能通话');
+        setTimeout(hideVoiceStatus, 3000);
+        if (typeof AndroidBridge !== 'undefined' && AndroidBridge) {
+            AndroidBridge.openAppSettings();
+        } else {
+            alert('需要摄像头/麦克风权限才能通话，请先在系统设置中开启');
+        }
     });
 }
 
@@ -559,13 +606,26 @@ function acceptCall() {
         .catch(function(error) {
             console.error('获取媒体设备失败:', error);
             endCall();
+            showVoiceStatus('❌ 无法访问摄像头/麦克风');
+            setTimeout(hideVoiceStatus, 3000);
+            if (typeof AndroidBridge !== 'undefined' && AndroidBridge) {
+                AndroidBridge.openAppSettings();
+            } else {
+                alert('无法访问摄像头/麦克风，请在系统设置中开启权限');
+            }
         });
         
         pendingOffer = null;
     }).catch(function(error) {
         console.error('权限请求失败:', error);
         rejectCall();
-        alert('需要摄像头/麦克风权限才能接听通话');
+        showVoiceStatus('❌ 需要摄像头/麦克风权限才能接听');
+        setTimeout(hideVoiceStatus, 3000);
+        if (typeof AndroidBridge !== 'undefined' && AndroidBridge) {
+            AndroidBridge.openAppSettings();
+        } else {
+            alert('需要摄像头/麦克风权限才能接听通话');
+        }
     });
 }
 

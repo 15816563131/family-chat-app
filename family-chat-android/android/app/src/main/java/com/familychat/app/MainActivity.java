@@ -109,14 +109,36 @@ public class MainActivity extends Activity {
             public void onPermissionRequest(android.webkit.PermissionRequest request) {
                 Log.d(TAG, "WebView permission request: " + request.getOrigin());
                 String[] requestedResources = request.getResources();
-                boolean shouldGrant = false;
+                boolean wantsCamera = false;
+                boolean wantsAudio = false;
                 for (String res : requestedResources) {
-                    if (android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(res)
-                            || android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(res)) {
-                        shouldGrant = true;
-                        break;
+                    if (android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(res)) {
+                        wantsCamera = true;
+                    } else if (android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(res)) {
+                        wantsAudio = true;
                     }
                 }
+                
+                boolean hasCameraPerm = ContextCompat.checkSelfPermission(MainActivity.this,
+                        Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED;
+                boolean hasAudioPerm = ContextCompat.checkSelfPermission(MainActivity.this,
+                        Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
+                
+                if ((wantsCamera && !hasCameraPerm) || (wantsAudio && !hasAudioPerm)) {
+                    Log.d(TAG, "Android runtime permissions not yet granted, requesting...");
+                    request.deny();
+                    runOnUiThread(() -> {
+                        if (wantsCamera && !hasCameraPerm) {
+                            requestCameraPermission();
+                        }
+                        if (wantsAudio && !hasAudioPerm) {
+                            requestAudioPermission();
+                        }
+                    });
+                    return;
+                }
+                
+                boolean shouldGrant = wantsCamera || wantsAudio;
                 if (shouldGrant) {
                     request.grant(requestedResources);
                     Log.d(TAG, "WebView permission GRANTED");
@@ -337,6 +359,20 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public void openAppSettings() {
+            runOnUiThread(() -> {
+                Intent intent = new Intent();
+                intent.setAction(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+                intent.setData(Uri.fromParts("package", getPackageName(), null));
+                try {
+                    startActivity(intent);
+                } catch (Exception e) {
+                    Log.e(TAG, "Failed to open settings", e);
+                }
+            });
+        }
+
+        @JavascriptInterface
         public void sendSms(String phoneNumber, String message) {
             Log.d(TAG, "Sending SMS to: " + phoneNumber);
             sendSmsMessage(phoneNumber, message);
@@ -480,22 +516,60 @@ public class MainActivity extends Activity {
 
     private void requestCameraAndAudioPermissions() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            boolean needCamera = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
-                    != PackageManager.PERMISSION_GRANTED;
-            boolean needAudio = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-                    != PackageManager.PERMISSION_GRANTED;
-            if (needCamera || needAudio) {
-                String[] permissionsToRequest;
-                if (needCamera && needAudio) {
-                    permissionsToRequest = new String[]{Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO};
-                } else if (needCamera) {
-                    permissionsToRequest = new String[]{Manifest.permission.CAMERA};
+            requestCameraPermission();
+            requestAudioPermission();
+        }
+    }
+
+    private void requestCameraPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+                    != PackageManager.PERMISSION_GRANTED) {
+                if (ActivityCompat.shouldShowRequestPermissionRationale(this,
+                        Manifest.permission.CAMERA)) {
+                    showPermissionRationaleDialog("Camera Permission Needed",
+                            "This app needs camera access for video calls.",
+                            Manifest.permission.CAMERA,
+                            CAMERA_PERMISSION_REQUEST_CODE);
                 } else {
-                    permissionsToRequest = new String[]{Manifest.permission.RECORD_AUDIO};
+                    ActivityCompat.requestPermissions(this,
+                            new String[]{Manifest.permission.CAMERA},
+                            CAMERA_PERMISSION_REQUEST_CODE);
                 }
-                ActivityCompat.requestPermissions(this, permissionsToRequest, CAMERA_PERMISSION_REQUEST_CODE);
             }
         }
+    }
+
+    private void requestAudioPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+                    != PackageManager.PERMISSION_GRANTED) {
+                if (ActivityCompat.shouldShowRequestPermissionRationale(this,
+                        Manifest.permission.RECORD_AUDIO)) {
+                    showPermissionRationaleDialog("Microphone Permission Needed",
+                            "This app needs microphone access for voice calls and voice messages.",
+                            Manifest.permission.RECORD_AUDIO,
+                            AUDIO_PERMISSION_REQUEST_CODE);
+                } else {
+                    ActivityCompat.requestPermissions(this,
+                            new String[]{Manifest.permission.RECORD_AUDIO},
+                            AUDIO_PERMISSION_REQUEST_CODE);
+                }
+            }
+        }
+    }
+
+    private void showPermissionRationaleDialog(String title, String message, String permission, int requestCode) {
+        if (isFinishing() || isDestroyed()) return;
+        new AlertDialog.Builder(this)
+                .setTitle(title)
+                .setMessage(message)
+                .setPositiveButton("Grant", (dialog, which) -> {
+                    ActivityCompat.requestPermissions(this,
+                            new String[]{permission}, requestCode);
+                })
+                .setNegativeButton("Deny", null)
+                .show();
     }
 
     private void requestSmsPermission() {
