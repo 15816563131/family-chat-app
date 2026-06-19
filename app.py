@@ -13,7 +13,7 @@ app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'family-chat-secret-key-
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///family_chat.db').replace('postgres://', 'postgresql://')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'pool_pre_ping': True, 'pool_recycle': 300}
-app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'uploads')
+app.config['UPLOAD_FOLDER'] = os.environ.get('UPLOAD_FOLDER', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'uploads'))
 app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024  # 20MB (支持语音文件)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
@@ -77,6 +77,7 @@ class Message(db.Model):
     voice_duration = db.Column(db.Float, default=0.0)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     read = db.Column(db.Boolean, default=False)
+    recalled = db.Column(db.Boolean, default=False)
 
 
 class Blacklist(db.Model):
@@ -503,7 +504,8 @@ def get_messages(user_id, friend_id):
             'content': msg.content,
             'msg_type': msg.msg_type or 'text',
             'timestamp': msg.timestamp.isoformat(),
-            'is_mine': msg.sender_id == user_id
+            'is_mine': msg.sender_id == user_id,
+            'recalled': msg.recalled or False
         }
         if msg.voice_url:
             item['voice_url'] = msg.voice_url
@@ -613,7 +615,8 @@ def handle_send_message(data):
             'voice_url': voice_url,
             'voice_duration': voice_duration,
             'timestamp': message.timestamp.isoformat(),
-            'is_mine': False
+            'is_mine': False,
+            'recalled': False
         }
         
         emit('receive_message', message_data, room=str(receiver_id))
@@ -623,6 +626,48 @@ def handle_send_message(data):
         
     except Exception as e:
         logger.error(f'Sending message failed: {e}')
+        db.session.rollback()
+
+
+@socketio.on('recall_message')
+def handle_recall_message(data):
+    try:
+        message_id = data.get('message_id')
+        user_id = data.get('user_id')
+        if not message_id or not user_id:
+            return
+        
+        message = Message.query.get(int(message_id))
+        if not message:
+            return
+        
+        # 只有发送者才能撤回
+        if int(message.sender_id) != int(user_id):
+            logger.warning(f'User {user_id} attempted to recall message {message_id} not owned')
+            return
+        
+        # 只能撤回2分钟内发送的消息
+        from datetime import timedelta
+        if datetime.utcnow() - message.timestamp > timedelta(minutes=2):
+            logger.warning(f'Message {message_id} too old to recall')
+            return
+        
+        message.recalled = True
+        message.content = '[撤回的消息]'
+        db.session.commit()
+        
+        recall_data = {
+            'message_id': message.id,
+            'sender_id': message.sender_id,
+            'receiver_id': message.receiver_id,
+            'timestamp': datetime.utcnow().isoformat()
+        }
+        emit('message_recalled', recall_data, room=str(message.receiver_id))
+        emit('message_recalled', recall_data, room=str(message.sender_id))
+        logger.info(f'Message {message.id} recalled by user {user_id}')
+        
+    except Exception as e:
+        logger.error(f'Recall message failed: {e}')
         db.session.rollback()
 
 

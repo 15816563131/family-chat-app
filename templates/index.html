@@ -139,6 +139,18 @@
         </div>
     </div>
 
+    <!-- ===== 录音悬浮框（微信风格） ===== -->
+    <div id="recording-overlay" class="recording-overlay" style="display: none;">
+        <div id="recording-box" class="recording-box">
+            <div id="recording-icon" class="recording-icon">🎤</div>
+            <div id="recording-wave" class="recording-wave">
+                <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+            </div>
+            <div id="recording-tip" class="recording-tip">松开发送，上滑取消</div>
+            <div id="recording-duration" class="recording-duration">0"</div>
+        </div>
+    </div>
+
     <div id="profile-modal" class="modal" style="display: none;">
         <div class="modal-content">
             <div class="modal-header">
@@ -393,7 +405,7 @@
             } catch (e) {}
         }
 
-        // 语音按钮：长按录制，松开发送
+        // ===== 语音录音按钮（微信风格悬浮框） =====
         function setupVoiceRecordButton() {
             var btn = document.getElementById('voice-input-btn');
             if (!btn) return;
@@ -401,17 +413,49 @@
             btn.title = '按住说话，松开发送';
             btn.removeAttribute('onclick');
 
-            var pressTimer = null;
             var isPressing = false;
+            var pressStartY = 0;
+            var hasMovedToCancel = false;
+            var recordingTimer = null;
 
             function startRecord(e) {
                 if (e) e.preventDefault();
                 if (isPressing) return;
                 isPressing = true;
+                hasMovedToCancel = false;
+                pressStartY = (e && e.touches && e.touches[0]) ? e.touches[0].clientY : (e ? e.clientY : 0);
                 btn.textContent = '🔴';
                 btn.classList.add('recording');
-                showVoiceStatus('🎙️ 正在录音，松开发送...');
+                // 显示悬浮框
+                showRecordingOverlay();
+                updateRecordingState('recording');
                 startVoiceRecording();
+                // 计时
+                var startT = Date.now();
+                recordingTimer = setInterval(function() {
+                    var d = Math.floor((Date.now() - startT) / 1000);
+                    var el = document.getElementById('recording-duration');
+                    if (el) el.textContent = d + '"';
+                }, 500);
+            }
+
+            function handleMove(e) {
+                if (!isPressing) return;
+                var clientY = 0;
+                if (e && e.touches && e.touches.length > 0) {
+                    clientY = e.touches[0].clientY;
+                } else if (e) {
+                    clientY = e.clientY;
+                }
+                // 上滑超过 80px 视为取消
+                var dy = pressStartY - clientY;
+                if (dy > 80 && !hasMovedToCancel) {
+                    hasMovedToCancel = true;
+                    updateRecordingState('cancel');
+                } else if (dy <= 60 && hasMovedToCancel) {
+                    hasMovedToCancel = false;
+                    updateRecordingState('recording');
+                }
             }
 
             function stopRecord(e) {
@@ -420,7 +464,13 @@
                 isPressing = false;
                 btn.textContent = '🎤';
                 btn.classList.remove('recording');
-                stopVoiceRecording();
+                if (recordingTimer) { clearInterval(recordingTimer); recordingTimer = null; }
+                hideRecordingOverlay();
+                if (hasMovedToCancel) {
+                    cancelVoiceRecording();
+                } else {
+                    stopVoiceRecording();
+                }
             }
 
             function cancelRecord(e) {
@@ -429,36 +479,45 @@
                 isPressing = false;
                 btn.textContent = '🎤';
                 btn.classList.remove('recording');
-                hideVoiceStatus();
-                try {
-                    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-                        mediaRecorder.onstop = null;
-                        mediaRecorder.stop();
-                    }
-                } catch (err) {}
+                if (recordingTimer) { clearInterval(recordingTimer); recordingTimer = null; }
+                hideRecordingOverlay();
+                cancelVoiceRecording();
             }
 
-            // 触摸事件（手机）
+            // 触摸事件
             btn.addEventListener('touchstart', startRecord, { passive: false });
+            btn.addEventListener('touchmove', handleMove, { passive: true });
             btn.addEventListener('touchend', stopRecord, { passive: false });
             btn.addEventListener('touchcancel', cancelRecord, { passive: false });
 
-            // 鼠标事件（电脑）
-            btn.addEventListener('mousedown', startRecord);
-            btn.addEventListener('mouseup', stopRecord);
-            btn.addEventListener('mouseleave', function(e) { if (isPressing) stopRecord(e); });
+            // 鼠标事件
+            btn.addEventListener('mousedown', function(e) { startRecord(e); });
+            window.addEventListener('mousemove', function(e) { if (isPressing) handleMove(e); });
+            window.addEventListener('mouseup', function(e) { if (isPressing) stopRecord(e); });
         }
 
-        function downloadApk() {
-            const btn = event.target;
-            const original = btn.textContent;
-            btn.textContent = '⏳ 正在下载...';
-            btn.disabled = true;
-            window.location.href = '/api/apk/download';
-            setTimeout(function() {
-                btn.textContent = original;
-                btn.disabled = false;
-            }, 3000);
+        function showRecordingOverlay() {
+            var el = document.getElementById('recording-overlay');
+            if (el) el.style.display = 'flex';
+        }
+        function hideRecordingOverlay() {
+            var el = document.getElementById('recording-overlay');
+            if (el) el.style.display = 'none';
+        }
+        function updateRecordingState(state) {
+            var box = document.getElementById('recording-box');
+            var icon = document.getElementById('recording-icon');
+            var tip = document.getElementById('recording-tip');
+            if (!box || !icon || !tip) return;
+            if (state === 'cancel') {
+                box.classList.add('cancel-state');
+                icon.textContent = '❌';
+                tip.textContent = '松开手指，取消发送';
+            } else {
+                box.classList.remove('cancel-state');
+                icon.textContent = '🎤';
+                tip.textContent = '松开发送，上滑取消';
+            }
         }
     </script>
 </body>

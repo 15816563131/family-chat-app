@@ -307,7 +307,6 @@ function stopVoiceRecording() {
         if (mediaRecorder && isAudioRecording && mediaRecorder.state !== 'inactive') {
             mediaRecorder.stop();
         } else if (isAudioRecording) {
-            // 如果 recorder 异常，直接重置状态
             if (audioCurrentStream) {
                 var tracks = audioCurrentStream.getTracks();
                 tracks.forEach(function(track) { track.stop(); });
@@ -320,6 +319,42 @@ function stopVoiceRecording() {
         }
     } catch (err) {
         console.error('停止录音出错:', err);
+        isAudioRecording = false;
+        var btn = document.getElementById('voice-input-btn');
+        if (btn) btn.textContent = '🎤';
+        hideVoiceStatus();
+    }
+}
+
+function cancelVoiceRecording() {
+    try {
+        if (mediaRecorder && isAudioRecording && mediaRecorder.state !== 'inactive') {
+            // 替换 onstop 为取消逻辑，不发送
+            mediaRecorder.onstop = function() {
+                if (audioCurrentStream) {
+                    var tracks = audioCurrentStream.getTracks();
+                    tracks.forEach(function(track) { track.stop(); });
+                    audioCurrentStream = null;
+                }
+                isAudioRecording = false;
+                var btn = document.getElementById('voice-input-btn');
+                if (btn) btn.textContent = '🎤';
+                hideVoiceStatus();
+            };
+            mediaRecorder.stop();
+        } else if (isAudioRecording) {
+            if (audioCurrentStream) {
+                var tracks = audioCurrentStream.getTracks();
+                tracks.forEach(function(track) { track.stop(); });
+                audioCurrentStream = null;
+            }
+            isAudioRecording = false;
+            var btn = document.getElementById('voice-input-btn');
+            if (btn) btn.textContent = '🎤';
+            hideVoiceStatus();
+        }
+    } catch (err) {
+        console.error('取消录音出错:', err);
         isAudioRecording = false;
         var btn = document.getElementById('voice-input-btn');
         if (btn) btn.textContent = '🎤';
@@ -1199,7 +1234,12 @@ function addMessageToUI(message) {
     
     let bubbleContent;
     
-    if (message.voice_url) {
+    const isRecalled = message.recalled || message.content === '[撤回的消息]';
+    
+    if (isRecalled) {
+        const recallText = message.is_mine ? '你撤回了一条消息' : `${senderName} 撤回了一条消息`;
+        bubbleContent = `<div class="recall-notice">${escapeHtml(recallText)}</div>`;
+    } else if (message.voice_url) {
         const duration = message.voice_duration ? Math.round(message.voice_duration) + '"' : '语音';
         bubbleContent = `
             <div class="msg-bubble voice-message-bubble">
@@ -1226,25 +1266,137 @@ function addMessageToUI(message) {
         ? `${bubbleContent}${avatarHtml}`
         : `${avatarHtml}${bubbleContent}`;
     
+    // 自己发送的消息支持长按/右键撤回
+    if (message.is_mine && message.id && !isRecalled) {
+        let longPressTimer = null;
+        const handler = function() { showMessageMenu(messageElement, message, senderName); };
+        messageElement.addEventListener('contextmenu', function(e) { e.preventDefault(); handler(); });
+        // 移动端长按
+        messageElement.addEventListener('touchstart', function(e) {
+            longPressTimer = setTimeout(handler, 600);
+        }, { passive: true });
+        messageElement.addEventListener('touchend', function(e) {
+            if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+        });
+        messageElement.addEventListener('touchmove', function(e) {
+            if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+        });
+        // PC 鼠标长按
+        messageElement.addEventListener('mousedown', function(e) {
+            longPressTimer = setTimeout(handler, 800);
+        });
+        messageElement.addEventListener('mouseup', function(e) {
+            if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+        });
+        messageElement.addEventListener('mouseleave', function(e) {
+            if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+        });
+    }
+    
     messagesContainer.appendChild(messageElement);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
 
+// ===== 消息菜单（撤回等）=====
+let messageMenuElement = null;
+
+function showMessageMenu(elem, message, senderName) {
+    hideMessageMenu();
+    
+    const menu = document.createElement('div');
+    menu.className = 'message-menu';
+    
+    // 计算菜单位置
+    const rect = elem.getBoundingClientRect();
+    const container = document.getElementById('messages-container');
+    const containerRect = container ? container.getBoundingClientRect() : { left: 0, top: 0 };
+    
+    menu.style.left = (rect.left - containerRect.left + rect.width / 2 - 50) + 'px';
+    menu.style.top = (rect.top - containerRect.top - 40) + 'px';
+    
+    const btn = document.createElement('button');
+    btn.textContent = '撤回';
+    btn.onclick = function() {
+        recallMessage(message);
+        hideMessageMenu();
+    };
+    menu.appendChild(btn);
+    
+    // 点击其他位置关闭
+    setTimeout(function() {
+        document.addEventListener('click', hideMessageMenu, { once: true, capture: true });
+    }, 10);
+    
+    const chatWindow = document.getElementById('chat-window');
+    if (chatWindow) {
+        chatWindow.appendChild(menu);
+        messageMenuElement = menu;
+    }
+}
+
+function hideMessageMenu() {
+    if (messageMenuElement && messageMenuElement.parentNode) {
+        messageMenuElement.parentNode.removeChild(messageMenuElement);
+    }
+    messageMenuElement = null;
+}
+
+function recallMessage(message) {
+    if (!socket) {
+        alert('连接未就绪，无法撤回');
+        return;
+    }
+    socket.emit('recall_message', {
+        message_id: message.id,
+        user_id: currentUser.id
+    });
+}
+
+// ===== 当前正在播放的语音（用于暂停/继续
+let currentPlayingAudio = null;
+let currentPlayingElement = null;
+
 function playVoiceMessage(element, url) {
+    // 如果点击的是当前正在播放的语音 → 暂停
+    if (currentPlayingAudio && currentPlayingElement === element && !currentPlayingAudio.paused) {
+        currentPlayingAudio.pause();
+        return;
+    }
+    // 如果点击的是当前暂停中的语音 → 继续
+    if (currentPlayingAudio && currentPlayingElement === element && currentPlayingAudio.paused) {
+        currentPlayingAudio.play().catch(function(err) {
+            console.error('继续播放语音失败:', err);
+        });
+        return;
+    }
+    // 其他情况：停止之前正在播放的语音
+    if (currentPlayingAudio) {
+        try { currentPlayingAudio.pause(); } catch(e) {}
+    }
+
     const audio = new Audio(url);
+    currentPlayingAudio = audio;
+    currentPlayingElement = element;
+
     audio.play().catch(function(error) {
         console.error('播放语音失败:', error);
     });
-    
-    if (element) {
-        const playIcon = element.querySelector('.voice-play-icon');
-        if (playIcon) {
-            playIcon.textContent = '⏸️';
-            audio.onended = function() {
-                playIcon.textContent = '▶️';
-            };
-        }
+
+    const playIcon = element.querySelector('.voice-play-icon');
+    if (playIcon) {
+        playIcon.textContent = '⏸️';
     }
+
+    audio.onpause = function() {
+        if (playIcon) playIcon.textContent = '▶️';
+    };
+    audio.onended = function() {
+        if (playIcon) playIcon.textContent = '▶️';
+        if (currentPlayingAudio === audio) {
+            currentPlayingAudio = null;
+            currentPlayingElement = null;
+        }
+    };
 }
 
 function getAvatarInitial(name) {
@@ -1334,8 +1486,25 @@ function handleReceivedMessage(message) {
         receivedMessages[message.sender_id] = [];
     }
     receivedMessages[message.sender_id].push(message);
+}
+
+function handleMessageRecalled(data) {
+    if (!data || !data.message_id) return;
     
-    loadFriends();
+    const mid = data.message_id;
+    const element = document.querySelector(`[data-message-id="${mid}"]`);
+    
+    // 如果找到元素 → 替换内容为撤回提示
+    if (element) {
+        let recallText;
+        if (element.classList.contains('sent')) {
+            recallText = '你撤回了一条消息';
+        } else {
+            const friendName = (currentFriendInfo ? currentFriendInfo.username : '对方');
+            recallText = friendName + ' 撤回了一条消息';
+        }
+        element.innerHTML = `<div class="recall-notice">${escapeHtml(recallText)}</div>`;
+    }
 }
 
 function showMessageNotification(message) {
@@ -2078,6 +2247,11 @@ function initChat() {
     socket.on('receive_message', (message) => {
         console.log('📨 收到消息:', message);
         handleReceivedMessage(message);
+    });
+    
+    socket.on('message_recalled', (data) => {
+        console.log('🔄 收到消息撤回:', data);
+        handleMessageRecalled(data);
     });
     
     socket.on('connect_error', (error) => {
