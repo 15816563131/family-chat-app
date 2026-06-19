@@ -9,9 +9,9 @@
   "orientation": "portrait-primary",
   "icons": [
     {
-      "src": "/static/icon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml"
+      "src": "/static/app-logo.png",
+      "sizes": "2048x2048",
+      "type": "image/png"
     }
   ],
   "categories": ["social", "communication"]

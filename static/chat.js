@@ -894,22 +894,26 @@ function showMessage(message, isError = true) {
 }
 
 async function register() {
+    showLoading();
     const username = document.getElementById('register-username').value.trim();
     const password = document.getElementById('register-password').value;
     const passwordConfirm = document.getElementById('register-password-confirm').value;
     
     if (!username || !password) {
         showMessage('请填写所有字段');
+        hideLoading();
         return;
     }
     
     if (password !== passwordConfirm) {
         showMessage('两次密码输入不一致');
+        hideLoading();
         return;
     }
     
     if (password.length < 6) {
         showMessage('密码长度至少为6位');
+        hideLoading();
         return;
     }
     
@@ -926,25 +930,30 @@ async function register() {
         
         if (response.ok) {
             showMessage('注册成功！请登录', false);
+            hideLoading();
             setTimeout(() => {
                 showLogin();
                 document.getElementById('login-username').value = username;
             }, 1000);
         } else {
             showMessage(data.error || '注册失败');
+            hideLoading();
         }
     } catch (error) {
         showMessage('网络错误，请重试');
+        hideLoading();
         console.error('注册错误:', error);
     }
 }
 
 async function login() {
+    showLoading();
     const username = document.getElementById('login-username').value.trim();
     const password = document.getElementById('login-password').value;
     
     if (!username || !password) {
         showMessage('请输入用户名和密码');
+        hideLoading();
         return;
     }
     
@@ -984,11 +993,14 @@ async function login() {
             }
             
             initChat();
+            hideLoading();
         } else {
             showMessage(data.error || '登录失败');
+            hideLoading();
         }
     } catch (error) {
         showMessage('网络错误，请重试');
+        hideLoading();
         console.error('登录错误:', error);
     }
 }

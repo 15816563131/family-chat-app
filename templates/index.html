@@ -15,8 +15,8 @@
     <div id="app">
         <div id="login-container">
             <div class="auth-box">
-                <h2>🌈 家庭聊天</h2>
-                <div class="version-badge">v2.0.0</div>
+                <img src="/static/app-logo.png" alt="家庭聊天" class="app-logo">
+                <div class="version-badge">v2.1.0</div>
                 <div id="login-form">
                     <input type="text" id="login-username" placeholder="👤 用户名">
                     <input type="password" id="login-password" placeholder="🔒 密码">
@@ -107,7 +107,7 @@
             
             <div class="chat-area">
                 <div id="no-chat-selected">
-                    <div class="no-chat-icon">💬</div>
+                    <img src="/static/empty-state.png" alt="选择好友" class="empty-state-img">
                     <p>选择一个好友开始聊天</p>
                 </div>
                 <div id="chat-window" style="display: none;">
@@ -137,6 +137,11 @@
                 </div>
             </div>
         </div>
+    </div>
+
+    <!-- ===== 加载动画 ===== -->
+    <div class="loading-overlay" id="loading-overlay">
+        <div class="loading-spinner"></div>
     </div>
 
     <!-- ===== 录音悬浮框（微信风格） ===== -->
@@ -213,7 +218,7 @@
     <!-- ===== 通话界面 ===== -->
     <div id="call-overlay">
         <div id="incoming-call">
-            <div class="call-avatar" id="caller-avatar">?</div>
+            <img src="/static/call-avatar.png" class="call-avatar-img" id="caller-avatar">
             <div class="caller-name" id="caller-name">正在呼叫...</div>
             <div class="call-type-label" id="call-type-label">📹 视频通话</div>
             <div class="incoming-buttons">
@@ -518,6 +523,16 @@
                 icon.textContent = '🎤';
                 tip.textContent = '松开发送，上滑取消';
             }
+        }
+
+        // 加载动画控制
+        function showLoading() {
+            var el = document.getElementById('loading-overlay');
+            if (el) el.classList.add('active');
+        }
+        function hideLoading() {
+            var el = document.getElementById('loading-overlay');
+            if (el) el.classList.remove('active');
         }
     </script>
 </body>
