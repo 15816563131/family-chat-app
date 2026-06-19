@@ -1,0 +1,21 @@
+services:
+  # ===== Web 服务 =====
+  - type: web
+    name: family-chat
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT -k eventlet -w 1
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: family-chat-db
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+
+  # ===== PostgreSQL 数据库 =====
+databases:
+  - name: family-chat-db
+    databaseName: family_chat
+    plan: free
+    ipAllowList: []  # 仅允许同一账户内访问

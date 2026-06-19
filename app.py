@@ -10,8 +10,9 @@ import logging
 app = Flask(__name__)
 
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'family-chat-secret-key-2024')
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///family_chat.db')
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///family_chat.db').replace('postgres://', 'postgresql://')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'pool_pre_ping': True, 'pool_recycle': 300}
 app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'uploads')
 app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024  # 20MB (支持语音文件)
 
@@ -672,26 +673,112 @@ def handle_webrtc_busy(data):
         emit('webrtc_busy', {'from': data.get('from')}, room=str(target))
 
 
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8080))
-    
+# ===== 数据导出接口（用于迁移到 Render） =====
+EXPORT_TOKEN = os.environ.get('EXPORT_TOKEN', 'export-secret-123')
+
+def verify_export_token():
+    """验证导出接口的访问令牌"""
+    from flask import request as req
+    return req.args.get('token') == EXPORT_TOKEN
+
+
+@app.route('/api/export/users')
+def export_users():
+    if not verify_export_token():
+        return jsonify({'error': '无权限'}), 403
+    users = User.query.all()
+    result = []
+    for u in users:
+        result.append({
+            'id': u.id, 'username': u.username,
+            'password_hash': u.password_hash,
+            'avatar': u.avatar, 'bio': u.bio,
+            'created_at': u.created_at.isoformat() if u.created_at else None
+        })
+    return jsonify(result)
+
+
+@app.route('/api/export/friendships')
+def export_friendships():
+    if not verify_export_token():
+        return jsonify({'error': '无权限'}), 403
+    data = Friendship.query.all()
+    result = [{'id': f.id, 'user1_id': f.user1_id, 'user2_id': f.user2_id,
+               'created_at': f.created_at.isoformat() if f.created_at else None} for f in data]
+    return jsonify(result)
+
+
+@app.route('/api/export/friend_requests')
+def export_friend_requests():
+    if not verify_export_token():
+        return jsonify({'error': '无权限'}), 403
+    data = FriendRequest.query.all()
+    result = [{'id': r.id, 'sender_id': r.sender_id, 'receiver_id': r.receiver_id,
+               'status': r.status,
+               'created_at': r.created_at.isoformat() if r.created_at else None} for r in data]
+    return jsonify(result)
+
+
+@app.route('/api/export/blacklist')
+def export_blacklist():
+    if not verify_export_token():
+        return jsonify({'error': '无权限'}), 403
+    data = Blacklist.query.all()
+    result = [{'id': b.id, 'user_id': b.user_id, 'blocked_user_id': b.blocked_user_id,
+               'created_at': b.created_at.isoformat() if b.created_at else None} for b in data]
+    return jsonify(result)
+
+
+@app.route('/api/export/messages')
+def export_messages():
+    if not verify_export_token():
+        return jsonify({'error': '无权限'}), 403
+    msgs = Message.query.order_by(Message.timestamp.asc()).all()
+    result = []
+    for m in msgs:
+        result.append({
+            'id': m.id, 'sender_id': m.sender_id, 'receiver_id': m.receiver_id,
+            'content': m.content, 'msg_type': m.msg_type or 'text',
+            'voice_url': m.voice_url or '', 'voice_duration': m.voice_duration or 0,
+            'timestamp': m.timestamp.isoformat() if m.timestamp else None,
+            'read': m.read
+        })
+    return jsonify(result)
+
+
+def init_database():
+    """在所有环境中初始化数据库，支持 Gunicorn（Render）和直接运行"""
     with app.app_context():
         db.create_all()
-        # 为旧数据库添加 voice_url 和 voice_duration 列
+        # 兼容旧 SQLite 数据库：检查并添加缺失列
         try:
             from sqlalchemy import inspect, text
             inspector = inspect(db.engine)
+            dialect = inspector.dialect.name
             cols = [col['name'] for col in inspector.get_columns('message')]
             if 'voice_url' not in cols:
-                db.session.execute(text('ALTER TABLE message ADD COLUMN voice_url VARCHAR(255) DEFAULT ""'))
+                if dialect == 'sqlite':
+                    db.session.execute(text('ALTER TABLE message ADD COLUMN voice_url VARCHAR(255) DEFAULT ""'))
+                else:
+                    db.session.execute(text('ALTER TABLE message ADD COLUMN voice_url VARCHAR(255) DEFAULT \'\''))
                 db.session.commit()
                 logger.info('Added voice_url column')
             if 'voice_duration' not in cols:
-                db.session.execute(text('ALTER TABLE message ADD COLUMN voice_duration FLOAT DEFAULT 0.0'))
+                if dialect == 'sqlite':
+                    db.session.execute(text('ALTER TABLE message ADD COLUMN voice_duration FLOAT DEFAULT 0.0'))
+                else:
+                    db.session.execute(text('ALTER TABLE message ADD COLUMN voice_duration FLOAT DEFAULT 0'))
                 db.session.commit()
                 logger.info('Added voice_duration column')
         except Exception as e:
             logger.warning(f'DB column check skipped: {e}')
+
+
+# 启动时初始化数据库（支持 Gunicorn 和直接运行两种方式）
+init_database()
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 8080))
     
     logger.info('=' * 50)
     logger.info('Family chat app starting...')
