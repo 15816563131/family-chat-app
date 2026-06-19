@@ -410,6 +410,20 @@
             } catch (e) {}
         }
 
+        function downloadApk() {
+            try {
+                var link = document.createElement('a');
+                link.href = '/api/apk/download';
+                link.download = 'family-chat.apk';
+                link.target = '_blank';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            } catch (e) {
+                window.location.href = '/api/apk/download';
+            }
+        }
+
         // ===== 语音录音按钮（微信风格悬浮框） =====
         function setupVoiceRecordButton() {
             var btn = document.getElementById('voice-input-btn');
