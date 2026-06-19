@@ -30,7 +30,7 @@ class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(120), nullable=False)
-    avatar = db.Column(db.String(200), default='')
+    avatar = db.Column(db.Text, default='')
     bio = db.Column(db.String(500), default='这个人很懒，什么都没写~')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
@@ -148,19 +148,21 @@ def upload_avatar(user_id):
     if file.filename == '':
         return jsonify({'error': '未选择文件'}), 400
     
-    if not allowed_file(file.filename):
+    ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else 'jpg'
+    if ext not in ('png', 'jpg', 'jpeg', 'gif', 'webp'):
         return jsonify({'error': '不支持的图片格式'}), 400
     
-    ext = file.filename.rsplit('.', 1)[1].lower()
-    filename = f'avatar_{user_id}_{int(datetime.utcnow().timestamp())}.{ext}'
-    filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-    file.save(filepath)
+    # 读取文件并转为 base64，直接存数据库（Railway 文件系统是临时的）
+    file_bytes = file.read()
+    import base64
+    b64 = base64.b64encode(file_bytes).decode('utf-8')
+    mime_type = f'image/{ext}' if ext != 'jpg' else 'image/jpeg'
+    data_url = f'data:{mime_type};base64,{b64}'
     
-    avatar_url = f'/static/uploads/{filename}'
-    user.avatar = avatar_url
+    user.avatar = data_url
     db.session.commit()
     
-    return jsonify({'message': '头像上传成功', 'avatar_url': avatar_url}), 200
+    return jsonify({'message': '头像上传成功', 'avatar_url': data_url}), 200
 
 
 @app.route('/api/voice/upload', methods=['POST'])
@@ -186,10 +188,8 @@ def upload_voice():
 def get_avatar(user_id):
     user = User.query.get(user_id)
     if user and user.avatar:
-        avatar_path = os.path.join(app.config['UPLOAD_FOLDER'], os.path.basename(user.avatar))
-        if os.path.exists(avatar_path):
-            return send_file(avatar_path, mimetype='image/jpeg')
-    return '', 204
+        return jsonify({'avatar': user.avatar}), 200
+    return jsonify({'avatar': None}), 200
 
 
 @app.route('/api/register', methods=['POST'])
@@ -372,6 +372,13 @@ def handle_friend_request():
     
     if action == 'accept':
         friend_request.status = 'accepted'
+        
+        existing_friendship = Friendship.query.filter(
+            ((Friendship.user1_id == friend_request.sender_id) & (Friendship.user2_id == receiver_id)) |
+            ((Friendship.user1_id == receiver_id) & (Friendship.user2_id == friend_request.sender_id))
+        ).first()
+        if existing_friendship:
+            return jsonify({'error': '你们已经是好友了'}), 400
         
         friendship = Friendship(user1_id=friend_request.sender_id, user2_id=receiver_id)
         db.session.add(friendship)
