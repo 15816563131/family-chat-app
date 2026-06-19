@@ -72,6 +72,8 @@ class Message(db.Model):
     receiver_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     content = db.Column(db.Text, nullable=False)
     msg_type = db.Column(db.String(10), default='text')
+    voice_url = db.Column(db.String(255), default='')
+    voice_duration = db.Column(db.Float, default=0.0)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     read = db.Column(db.Boolean, default=False)
 
@@ -492,15 +494,20 @@ def get_messages(user_id, friend_id):
     result = []
     for msg in messages:
         sender = User.query.get(msg.sender_id)
-        result.append({
+        item = {
             'id': msg.id,
             'sender_id': msg.sender_id,
             'receiver_id': msg.receiver_id,
             'sender_name': sender.username if sender else 'Unknown',
             'content': msg.content,
+            'msg_type': msg.msg_type or 'text',
             'timestamp': msg.timestamp.isoformat(),
             'is_mine': msg.sender_id == user_id
-        })
+        }
+        if msg.voice_url:
+            item['voice_url'] = msg.voice_url
+            item['voice_duration'] = msg.voice_duration or 0
+        result.append(item)
     
     return jsonify(result)
 
@@ -520,13 +527,18 @@ def get_recent_messages(user_id):
     result = []
     for msg in messages:
         sender = User.query.get(msg.sender_id)
-        result.append({
+        item = {
             'id': msg.id,
             'sender_id': msg.sender_id,
             'sender_name': sender.username if sender else 'Unknown',
             'content': msg.content,
+            'msg_type': msg.msg_type or 'text',
             'timestamp': msg.timestamp.timestamp() * 1000
-        })
+        }
+        if msg.voice_url:
+            item['voice_url'] = msg.voice_url
+            item['voice_duration'] = msg.voice_duration or 0
+        result.append(item)
     return jsonify(result)
 
 
@@ -576,7 +588,15 @@ def handle_send_message(data):
             emit('message_failed', {'error': '对方已拉黑你'}, room=str(sender_id))
             return
         
-        message = Message(sender_id=sender_id, receiver_id=receiver_id, content=content, msg_type=msg_type)
+        message = Message(
+            sender_id=sender_id,
+            receiver_id=receiver_id,
+            content=content,
+            msg_type=msg_type
+        )
+        if voice_url:
+            message.voice_url = voice_url
+            message.voice_duration = float(voice_duration) if voice_duration else 0.0
         db.session.add(message)
         db.session.commit()
         
@@ -657,6 +677,21 @@ if __name__ == '__main__':
     
     with app.app_context():
         db.create_all()
+        # 为旧数据库添加 voice_url 和 voice_duration 列
+        try:
+            from sqlalchemy import inspect, text
+            inspector = inspect(db.engine)
+            cols = [col['name'] for col in inspector.get_columns('message')]
+            if 'voice_url' not in cols:
+                db.session.execute(text('ALTER TABLE message ADD COLUMN voice_url VARCHAR(255) DEFAULT ""'))
+                db.session.commit()
+                logger.info('Added voice_url column')
+            if 'voice_duration' not in cols:
+                db.session.execute(text('ALTER TABLE message ADD COLUMN voice_duration FLOAT DEFAULT 0.0'))
+                db.session.commit()
+                logger.info('Added voice_duration column')
+        except Exception as e:
+            logger.warning(f'DB column check skipped: {e}')
     
     logger.info('=' * 50)
     logger.info('Family chat app starting...')

@@ -31,7 +31,7 @@
                     <p class="switch-text">已有账号？<a onclick="showLogin()">立即登录</a></p>
                 </div>
                 <p id="auth-message"></p>
-                <div class="apk-section">
+                <div class="apk-section" id="apk-section">
                     <button class="apk-download-btn" onclick="downloadApk()">
                         📱 下载安卓安装包
                     </button>
@@ -353,9 +353,25 @@
             console.log('页面加载完成，初始化通知系统');
             setupPermissionRequests();
             checkApkAvailability();
+            setupVoiceRecordButton();
         });
 
+        // 检测是否运行在原生Android应用内（通过AndroidBridge判断）
+        function isAndroidApp() {
+            try {
+                return typeof window.AndroidBridge !== 'undefined' && window.AndroidBridge !== null;
+            } catch (e) {
+                return false;
+            }
+        }
+
         function checkApkAvailability() {
+            if (isAndroidApp()) {
+                var apkSection = document.getElementById('apk-section');
+                if (apkSection) apkSection.style.display = 'none';
+                console.log('Android应用内：隐藏APK下载区域');
+                return;
+            }
             try {
                 fetch('/api/apk/info', { cache: 'no-store' })
                     .then(function(r) { return r.json(); })
@@ -373,6 +389,62 @@
                         console.log('APK info check skipped:', e);
                     });
             } catch (e) {}
+        }
+
+        // 语音按钮：长按录制，松开发送
+        function setupVoiceRecordButton() {
+            var btn = document.getElementById('voice-input-btn');
+            if (!btn) return;
+            btn.textContent = '🎤';
+            btn.title = '按住说话，松开发送';
+            btn.removeAttribute('onclick');
+
+            var pressTimer = null;
+            var isPressing = false;
+
+            function startRecord(e) {
+                if (e) e.preventDefault();
+                if (isPressing) return;
+                isPressing = true;
+                btn.textContent = '🔴';
+                btn.classList.add('recording');
+                showVoiceStatus('🎙️ 正在录音，松开发送...');
+                startVoiceRecording();
+            }
+
+            function stopRecord(e) {
+                if (e) e.preventDefault();
+                if (!isPressing) return;
+                isPressing = false;
+                btn.textContent = '🎤';
+                btn.classList.remove('recording');
+                stopVoiceRecording();
+            }
+
+            function cancelRecord(e) {
+                if (e) e.preventDefault();
+                if (!isPressing) return;
+                isPressing = false;
+                btn.textContent = '🎤';
+                btn.classList.remove('recording');
+                hideVoiceStatus();
+                try {
+                    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                        mediaRecorder.onstop = null;
+                        mediaRecorder.stop();
+                    }
+                } catch (err) {}
+            }
+
+            // 触摸事件（手机）
+            btn.addEventListener('touchstart', startRecord, { passive: false });
+            btn.addEventListener('touchend', stopRecord, { passive: false });
+            btn.addEventListener('touchcancel', cancelRecord, { passive: false });
+
+            // 鼠标事件（电脑）
+            btn.addEventListener('mousedown', startRecord);
+            btn.addEventListener('mouseup', stopRecord);
+            btn.addEventListener('mouseleave', function(e) { if (isPressing) stopRecord(e); });
         }
 
         function downloadApk() {

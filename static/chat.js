@@ -239,69 +239,128 @@ function toggleSpeechRecognition() {
 }
 
 // ===== 语音消息录制 (MediaRecorder) =====
+let audioRecordStartTime = 0;
+let audioCurrentStream = null;
+
 function startVoiceRecording() {
     if (isAudioRecording) return;
+    audioChunks = [];
     
     navigator.mediaDevices.getUserMedia({ audio: true })
         .then(function(stream) {
-            audioChunks = [];
-            mediaRecorder = new MediaRecorder(stream);
+            audioCurrentStream = stream;
+            mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
             
             mediaRecorder.ondataavailable = function(event) {
-                if (event.data.size > 0) {
+                if (event.data && event.data.size > 0) {
                     audioChunks.push(event.data);
                 }
             };
             
             mediaRecorder.onstop = function() {
-                const tracks = stream.getTracks();
-                tracks.forEach(function(track) { track.stop(); });
+                var duration = (Date.now() - audioRecordStartTime) / 1000;
+                if (audioCurrentStream) {
+                    var tracks = audioCurrentStream.getTracks();
+                    tracks.forEach(function(track) { track.stop(); });
+                    audioCurrentStream = null;
+                }
                 
-                if (audioChunks.length > 0 && isLongPress) {
-                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-                    sendVoiceMessage(audioBlob);
+                if (audioChunks.length > 0 && duration >= 0.5) {
+                    var audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                    sendVoiceMessage(audioBlob, duration);
+                } else if (duration < 0.5) {
+                    showVoiceStatus('说话时间太短');
+                    setTimeout(hideVoiceStatus, 1500);
                 }
                 isAudioRecording = false;
-                isLongPress = false;
-                document.getElementById('voice-input-btn').textContent = '🎤';
+                var btn = document.getElementById('voice-input-btn');
+                if (btn) btn.textContent = '🎤';
                 hideVoiceStatus();
             };
             
+            mediaRecorder.onerror = function(err) {
+                console.error('录音错误:', err);
+                showVoiceStatus('录音出错，已取消');
+                setTimeout(hideVoiceStatus, 2000);
+                isAudioRecording = false;
+            };
+            
+            audioRecordStartTime = Date.now();
             mediaRecorder.start();
             isAudioRecording = true;
-            document.getElementById('voice-input-btn').textContent = '🔴';
-            showVoiceStatus('🎙️ 录音中... 松开发送');
+            var btn = document.getElementById('voice-input-btn');
+            if (btn) btn.textContent = '🔴';
+            showVoiceStatus('🎙️ 正在录音，松开发送');
         })
         .catch(function(error) {
             console.error('获取麦克风权限失败:', error);
-            showVoiceStatus('无法访问麦克风');
+            showVoiceStatus('❌ 无法访问麦克风，请检查权限');
+            if (typeof AndroidBridge !== 'undefined' && AndroidBridge) {
+                try { AndroidBridge.requestAudioPermission(); } catch (e) {}
+            }
+            setTimeout(hideVoiceStatus, 3000);
         });
 }
 
 function stopVoiceRecording() {
-    if (mediaRecorder && isAudioRecording) {
-        mediaRecorder.stop();
+    try {
+        if (mediaRecorder && isAudioRecording && mediaRecorder.state !== 'inactive') {
+            mediaRecorder.stop();
+        } else if (isAudioRecording) {
+            // 如果 recorder 异常，直接重置状态
+            if (audioCurrentStream) {
+                var tracks = audioCurrentStream.getTracks();
+                tracks.forEach(function(track) { track.stop(); });
+                audioCurrentStream = null;
+            }
+            isAudioRecording = false;
+            var btn = document.getElementById('voice-input-btn');
+            if (btn) btn.textContent = '🎤';
+            hideVoiceStatus();
+        }
+    } catch (err) {
+        console.error('停止录音出错:', err);
+        isAudioRecording = false;
+        var btn = document.getElementById('voice-input-btn');
+        if (btn) btn.textContent = '🎤';
+        hideVoiceStatus();
     }
 }
 
-async function sendVoiceMessage(audioBlob) {
+async function sendVoiceMessage(audioBlob, duration) {
     if (!currentFriendId) {
         showVoiceStatus('请先选择聊天对象');
         return;
     }
     
-    const formData = new FormData();
+    // 先在本地显示临时消息
+    var tempMessage = {
+        id: null,
+        sender_id: currentUser.id,
+        receiver_id: currentFriendId,
+        content: '🎤 [语音消息]',
+        voice_url: null,
+        voice_duration: duration || 1,
+        timestamp: new Date().toISOString(),
+        is_mine: true,
+        is_temporary: true
+    };
+    addMessageToUI(tempMessage);
+    var messagesContainer = document.getElementById('messages-container');
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    
+    var formData = new FormData();
     formData.append('audio', audioBlob, 'voice_' + Date.now() + '.webm');
     formData.append('sender_id', currentUser.id);
     formData.append('receiver_id', currentFriendId);
     
     try {
-        const response = await fetch('/api/voice/upload', {
+        var response = await fetch('/api/voice/upload', {
             method: 'POST',
             body: formData
         });
         
-        const data = await response.json();
+        var data = await response.json();
         if (response.ok && data.url) {
             if (socket && isConnected) {
                 socket.emit('send_message', {
@@ -309,15 +368,17 @@ async function sendVoiceMessage(audioBlob) {
                     receiver_id: currentFriendId,
                     content: '🎤 [语音消息]',
                     voice_url: data.url,
-                    voice_duration: data.duration || 0
+                    voice_duration: duration || data.duration || 0
                 });
             }
         } else {
             showVoiceStatus('语音上传失败');
+            setTimeout(hideVoiceStatus, 2000);
         }
     } catch (error) {
         console.error('上传语音失败:', error);
-        showVoiceStatus('语音上传失败');
+        showVoiceStatus('语音上传失败，请检查网络');
+        setTimeout(hideVoiceStatus, 2000);
     }
 }
 
