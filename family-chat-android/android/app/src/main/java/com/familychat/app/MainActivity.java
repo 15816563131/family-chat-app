@@ -10,6 +10,7 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.net.wifi.WifiManager;
@@ -59,11 +60,12 @@ public class MainActivity extends Activity {
     private MessagePollService pollService;
     private WebAppInterface webAppInterface;
     private boolean isFirstStart = true;
+    private static Context appContext = null;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
+        appContext = getApplicationContext();
         Log.d(TAG, "=== MainActivity onCreate ===");
 
         // 创建容器
@@ -487,6 +489,14 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void setUserId(int userId) {
             Log.d(TAG, "User ID from JS: " + userId);
+            // 保存到 SharedPreferences，供 ForegroundService 持久化读取
+            try {
+                SharedPreferences prefs = appContext.getSharedPreferences("FamilyChatPrefs", MODE_PRIVATE);
+                prefs.edit().putInt("userId", userId).apply();
+                Log.d(TAG, "userId saved to SharedPreferences: " + userId);
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to save userId: " + e.getMessage());
+            }
             if (pollService != null) {
                 pollService.setUserId(userId);
             }

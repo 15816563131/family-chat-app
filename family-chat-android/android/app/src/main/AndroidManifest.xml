@@ -83,6 +83,7 @@
             android:exported="false">
             <intent-filter>
                 <action android:name="com.familychat.app.RESTART_SERVICE" />
+                <action android:name="com.familychat.app.POLL" />
             </intent-filter>
         </receiver>
 

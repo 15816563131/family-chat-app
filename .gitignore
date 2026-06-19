@@ -76,6 +76,10 @@ build-apk.js
 download-android-studio.ps1
 *.bat
 
+# Fly.io 配置缓存
+.fly/
+/Flyfile
+
 # Android构建缓存
 family-chat-android/android/.gradle/
 family-chat-android/android/app/build/

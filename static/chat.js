@@ -1416,6 +1416,14 @@ function getAvatarInitial(name) {
     return name.charAt(0).toUpperCase();
 }
 
+function safeAvatarSrc(avatarUrl) {
+    if (!avatarUrl) return null;
+    if (avatarUrl.startsWith('data:')) {
+        return avatarUrl;
+    }
+    return avatarUrl + '?t=' + Date.now();
+}
+
 function escapeHtml(text) {
     if (!text) return '';
     const div = document.createElement('div');
@@ -1622,10 +1630,11 @@ function updateUserAvatar(avatarUrl) {
     const avatarInitial = getAvatarInitial(currentUser.username);
     const initialElement = document.getElementById('user-avatar-initial');
     
-    if (avatarUrl) {
+    const src = safeAvatarSrc(avatarUrl);
+    if (src) {
         const imgElement = document.getElementById('user-avatar-img');
         if (imgElement) {
-            imgElement.src = avatarUrl + '?t=' + Date.now();
+            imgElement.src = src;
             imgElement.style.display = 'block';
         }
         if (initialElement) initialElement.style.display = 'none';
@@ -1664,9 +1673,16 @@ async function openProfile() {
         const imgElement = document.getElementById('profile-avatar-img');
         const initialElement = document.getElementById('profile-avatar-initial');
         if (user.avatar) {
-            imgElement.src = user.avatar + '?t=' + Date.now();
-            imgElement.style.display = 'block';
-            initialElement.style.display = 'none';
+            const src = safeAvatarSrc(user.avatar);
+            if (src) {
+                imgElement.src = src;
+                imgElement.style.display = 'block';
+                initialElement.style.display = 'none';
+            } else {
+                imgElement.style.display = 'none';
+                initialElement.style.display = 'block';
+                initialElement.textContent = getAvatarInitial(user.username);
+            }
         } else {
             imgElement.style.display = 'none';
             initialElement.style.display = 'block';
@@ -1734,7 +1750,21 @@ async function openFriendProfile() {
         const user = await response.json();
         
         currentFriendInfo = user;
-        document.getElementById('friend-profile-avatar').textContent = getAvatarInitial(user.username);
+        
+        const imgEl = document.getElementById('friend-profile-avatar-img');
+        const initEl = document.getElementById('friend-profile-avatar');
+        const src = safeAvatarSrc(user.avatar);
+        if (src) {
+            imgEl.src = src;
+            imgEl.style.display = 'block';
+            if (initEl) initEl.style.display = 'none';
+        } else {
+            if (imgEl) imgEl.style.display = 'none';
+            if (initEl) {
+                initEl.style.display = 'block';
+                initEl.textContent = getAvatarInitial(user.username);
+            }
+        }
         document.getElementById('friend-profile-username').value = user.username || '';
         document.getElementById('friend-profile-bio').value = user.bio || '';
         document.getElementById('friend-profile-modal').style.display = 'flex';
@@ -1972,7 +2002,7 @@ async function uploadAvatar(event) {
         if (response.ok) {
             const imgElement = document.getElementById('profile-avatar-img');
             const initialElement = document.getElementById('profile-avatar-initial');
-            imgElement.src = data.avatar_url + '?t=' + Date.now();
+            imgElement.src = data.avatar_url;
             imgElement.style.display = 'block';
             initialElement.style.display = 'none';
             // 同时更新侧边栏头像

@@ -1,0 +1,21 @@
+# ===== FamilyChat Fly.io 配置 =====
+app = "family-chat"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+# 持久化存储：数据库和上传文件
+[[mounts]]
+  source = "familychat_data"
+  destination = "/data"
+
+[env]
+  DATABASE_URL = "sqlite:////data/family_chat.db"
+  UPLOAD_FOLDER = "/data/uploads"
