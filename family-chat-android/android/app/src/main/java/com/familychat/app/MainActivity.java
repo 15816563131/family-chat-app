@@ -3,6 +3,7 @@ package com.familychat.app;
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.AlarmManager;
 import android.app.AlertDialog;
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -12,11 +13,13 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.os.SystemClock;
 import android.provider.Settings;
 import android.telephony.SmsManager;
 import android.util.Log;
@@ -36,10 +39,12 @@ public class MainActivity extends Activity {
     private WebView webView;
     private MessagePollService pollService;
     private PowerManager.WakeLock wakeLock;
+    private WifiManager.WifiLock wifiLock;
     private Handler keepAliveHandler;
     private Runnable keepAliveRunnable;
     private boolean isForeground = true;
     private boolean keepAliveRunning = false;
+    private boolean isPaused = false;
     private static final String WEB_URL = "https://family-chat-app-production-93b6.up.railway.app";
     private static final int POST_NOTIFICATIONS_REQUEST_CODE = 1002;
     private static final int SMS_PERMISSION_REQUEST_CODE = 1003;
@@ -72,10 +77,28 @@ public class MainActivity extends Activity {
         PowerManager powerManager = (PowerManager) getSystemService(POWER_SERVICE);
         if (powerManager != null) {
             wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "FamilyChat:WebViewKeepAlive");
-            wakeLock.acquire(30 * 60 * 1000L);
-            Log.d(TAG, "WakeLock acquired (30min)");
+            wakeLock.setReferenceCounted(false);
+            try {
+                wakeLock.acquire();
+                Log.d(TAG, "WakeLock acquired (indefinite)");
+            } catch (Exception e) {
+                Log.e(TAG, "WakeLock acquire failed: " + e.getMessage());
+            }
         }
 
+        WifiManager wifiManager = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
+        if (wifiManager != null) {
+            wifiLock = wifiManager.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "FamilyChat:WifiLock");
+            wifiLock.setReferenceCounted(false);
+            try {
+                wifiLock.acquire();
+                Log.d(TAG, "WifiLock acquired");
+            } catch (Exception e) {
+                Log.e(TAG, "WifiLock acquire failed: " + e.getMessage());
+            }
+        }
+
+        startForegroundService();
         startKeepAlive();
         requestNotificationPermission();
         requestAllPermissions();
@@ -245,6 +268,7 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         isForeground = true;
+        isPaused = false;
         if (webView != null && !isFinishing() && !isDestroyed()) {
             try {
                 webView.onResume();
@@ -253,12 +277,15 @@ public class MainActivity extends Activity {
                 Log.w(TAG, "onResume error", e);
             }
         }
+        ensureForegroundServiceRunning();
+        reacquireLocks();
     }
 
     @Override
     protected void onPause() {
         super.onPause();
         isForeground = false;
+        isPaused = true;
         if (webView != null && !isFinishing() && !isDestroyed()) {
             try {
                 webView.onPause();
@@ -266,6 +293,40 @@ public class MainActivity extends Activity {
             } catch (Exception e) {
                 Log.w(TAG, "onPause error", e);
             }
+        }
+        ensureForegroundServiceRunning();
+    }
+
+    private void reacquireLocks() {
+        try {
+            if (wakeLock != null && !wakeLock.isHeld()) {
+                wakeLock.acquire();
+                Log.d(TAG, "WakeLock re-acquired");
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "re-acquire wakeLock failed: " + e.getMessage());
+        }
+        try {
+            if (wifiLock != null && !wifiLock.isHeld()) {
+                wifiLock.acquire();
+                Log.d(TAG, "WifiLock re-acquired");
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "re-acquire wifiLock failed: " + e.getMessage());
+        }
+    }
+
+    private void ensureForegroundServiceRunning() {
+        try {
+            Intent serviceIntent = new Intent(this, ForegroundService.class);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                ContextCompat.startForegroundService(this, serviceIntent);
+            } else {
+                startService(serviceIntent);
+            }
+            Log.d(TAG, "ensureForegroundServiceRunning: service start attempted");
+        } catch (Exception e) {
+            Log.e(TAG, "ensureForegroundServiceRunning failed: " + e.getMessage());
         }
     }
 
@@ -282,8 +343,12 @@ public class MainActivity extends Activity {
             pollService.stopPolling();
         }
         if (wakeLock != null && wakeLock.isHeld()) {
-            wakeLock.release();
+            try { wakeLock.release(); } catch (Exception e) {}
             Log.d(TAG, "WakeLock released");
+        }
+        if (wifiLock != null && wifiLock.isHeld()) {
+            try { wifiLock.release(); } catch (Exception e) {}
+            Log.d(TAG, "WifiLock released");
         }
 
         if (webView != null) {
@@ -293,8 +358,9 @@ public class MainActivity extends Activity {
             webView = null;
         }
 
+        ensureForegroundServiceRunning();
         super.onDestroy();
-        Log.d(TAG, "Activity destroyed");
+        Log.d(TAG, "Activity destroyed (service kept running)");
     }
 
     public class WebAppInterface {
@@ -873,6 +939,15 @@ public class MainActivity extends Activity {
                 }
             } catch (Exception e) {}
         }
-        super.onBackPressed();
+        try {
+            moveTaskToBack(true);
+            ensureForegroundServiceRunning();
+            Log.d(TAG, "App moved to background (kept running)");
+        } catch (Exception e) {
+            Log.e(TAG, "moveTaskToBack failed: " + e.getMessage());
+            try {
+                super.onBackPressed();
+            } catch (Exception e2) {}
+        }
     }
 }

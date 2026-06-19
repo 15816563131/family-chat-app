@@ -1,15 +1,23 @@
 package com.familychat.app;
 
+import android.app.AlarmManager;
 import android.app.Notification;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.net.ConnectivityManager;
+import android.net.NetworkInfo;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.PowerManager;
+import android.os.SystemClock;
 import android.util.Log;
 
 import androidx.core.app.NotificationCompat;
@@ -31,17 +39,155 @@ public class ForegroundService extends Service {
     private static final String KEY_KNOWN_MSG_PREFIX = "known_msg_";
     private static final String SERVER_URL = "https://family-chat-app-production-93b6.up.railway.app";
     private static final long POLL_INTERVAL_MS = 8000;
+    private static final long ALARM_RESTART_INTERVAL_MS = 60000;
+    private static final int ALARM_RESTART_REQUEST_CODE = 5555;
 
     private Handler handler;
     private Runnable pollRunnable;
     private boolean isPolling = false;
     private int notificationId = 200;
+    private PowerManager.WakeLock wakeLock;
+    private WifiManager.WifiLock wifiLock;
+    private BroadcastReceiver connectivityReceiver;
 
     @Override
     public void onCreate() {
         super.onCreate();
         handler = new Handler(Looper.getMainLooper());
         Log.d(TAG, "ForegroundService created");
+
+        acquireLocks();
+        registerConnectivityReceiver();
+        scheduleAlarmRestart();
+    }
+
+    private void acquireLocks() {
+        try {
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            if (pm != null) {
+                wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "FamilyChat:SvcWakeLock");
+                wakeLock.setReferenceCounted(false);
+                wakeLock.acquire();
+                Log.d(TAG, "ForegroundService WakeLock acquired");
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "WakeLock acquire failed: " + e.getMessage());
+        }
+
+        try {
+            WifiManager wm = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
+            if (wm != null) {
+                wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "FamilyChat:SvcWifiLock");
+                wifiLock.setReferenceCounted(false);
+                wifiLock.acquire();
+                Log.d(TAG, "ForegroundService WifiLock acquired");
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "WifiLock acquire failed: " + e.getMessage());
+        }
+    }
+
+    private void releaseLocks() {
+        try {
+            if (wakeLock != null && wakeLock.isHeld()) {
+                wakeLock.release();
+            }
+        } catch (Exception e) {}
+        try {
+            if (wifiLock != null && wifiLock.isHeld()) {
+                wifiLock.release();
+            }
+        } catch (Exception e) {}
+    }
+
+    private void registerConnectivityReceiver() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(connectivityReceiver = new BroadcastReceiver() {
+                    @Override
+                    public void onReceive(Context context, Intent intent) {
+                        onConnectivityChanged();
+                    }
+                }, new IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION), Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                IntentFilter filter = new IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION);
+                registerReceiver(connectivityReceiver = new BroadcastReceiver() {
+                    @Override
+                    public void onReceive(Context context, Intent intent) {
+                        onConnectivityChanged();
+                    }
+                }, filter);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "registerConnectivityReceiver failed: " + e.getMessage());
+        }
+    }
+
+    private void unregisterConnectivityReceiver() {
+        if (connectivityReceiver != null) {
+            try {
+                unregisterReceiver(connectivityReceiver);
+            } catch (Exception e) {}
+            connectivityReceiver = null;
+        }
+    }
+
+    private void onConnectivityChanged() {
+        try {
+            ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+            NetworkInfo net = cm != null ? cm.getActiveNetworkInfo() : null;
+            if (net != null && net.isConnected()) {
+                Log.d(TAG, "Network connected, resuming poll");
+                if (!isPolling) {
+                    startPollingFromPrefs();
+                }
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "onConnectivityChanged failed: " + e.getMessage());
+        }
+    }
+
+    private void scheduleAlarmRestart() {
+        try {
+            AlarmManager am = (AlarmManager) getSystemService(ALARM_SERVICE);
+            if (am == null) return;
+            Intent intent = new Intent("com.familychat.app.RESTART_SERVICE");
+            intent.setPackage(getPackageName());
+            PendingIntent pi;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                pi = PendingIntent.getBroadcast(this, ALARM_RESTART_REQUEST_CODE, intent,
+                        PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+            } else {
+                pi = PendingIntent.getBroadcast(this, ALARM_RESTART_REQUEST_CODE, intent,
+                        PendingIntent.FLAG_UPDATE_CURRENT);
+            }
+            long triggerAt = SystemClock.elapsedRealtime() + ALARM_RESTART_INTERVAL_MS;
+            am.setInexactRepeating(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, ALARM_RESTART_INTERVAL_MS, pi);
+            Log.d(TAG, "Alarm restart scheduled at " + triggerAt);
+        } catch (Exception e) {
+            Log.e(TAG, "scheduleAlarmRestart failed: " + e.getMessage());
+        }
+    }
+
+    private void cancelAlarmRestart() {
+        try {
+            AlarmManager am = (AlarmManager) getSystemService(ALARM_SERVICE);
+            if (am == null) return;
+            Intent intent = new Intent("com.familychat.app.RESTART_SERVICE");
+            intent.setPackage(getPackageName());
+            PendingIntent pi;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                pi = PendingIntent.getBroadcast(this, ALARM_RESTART_REQUEST_CODE, intent,
+                        PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_NO_CREATE);
+            } else {
+                pi = PendingIntent.getBroadcast(this, ALARM_RESTART_REQUEST_CODE, intent,
+                        PendingIntent.FLAG_NO_CREATE);
+            }
+            if (pi != null) {
+                am.cancel(pi);
+                pi.cancel();
+            }
+        } catch (Exception e) {}
     }
 
     @Override
@@ -56,21 +202,52 @@ public class ForegroundService extends Service {
 
             Notification notification = new NotificationCompat.Builder(this, "family_chat_foreground")
                     .setContentTitle("FamilyChat Running")
-                    .setContentText("Background service is active")
+                    .setContentText("后台服务正在运行，保持消息接收")
                     .setSmallIcon(android.R.drawable.ic_dialog_info)
                     .setOngoing(true)
-                    .setPriority(NotificationCompat.PRIORITY_LOW)
+                    .setPriority(NotificationCompat.PRIORITY_MIN)
                     .setContentIntent(pendingIntent)
+                    .setWhen(System.currentTimeMillis())
+                    .setShowWhen(false)
                     .build();
 
             startForeground(1, notification);
+        }
+
+        if (wakeLock == null || !wakeLock.isHeld()) {
+            acquireLocks();
         }
 
         if (!isPolling) {
             startPollingFromPrefs();
         }
 
-        return START_STICKY;
+        return START_REDELIVER_INTENT;
+    }
+
+    @Override
+    public void onTaskRemoved(Intent rootIntent) {
+        Log.w(TAG, "onTaskRemoved - app task removed, will try to restart");
+        try {
+            Intent restartIntent = new Intent(this, ForegroundService.class);
+            restartIntent.setPackage(getPackageName());
+            PendingIntent restartPi;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                restartPi = PendingIntent.getService(getApplicationContext(), 9999,
+                        restartIntent, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_ONE_SHOT);
+            } else {
+                restartPi = PendingIntent.getService(getApplicationContext(), 9999,
+                        restartIntent, PendingIntent.FLAG_ONE_SHOT);
+            }
+            AlarmManager am = (AlarmManager) getSystemService(ALARM_SERVICE);
+            if (am != null) {
+                am.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                        SystemClock.elapsedRealtime() + 1000, restartPi);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "onTaskRemoved restart failed: " + e.getMessage());
+        }
+        super.onTaskRemoved(rootIntent);
     }
 
     private void startPollingFromPrefs() {
@@ -217,8 +394,24 @@ public class ForegroundService extends Service {
 
     @Override
     public void onDestroy() {
-        super.onDestroy();
         stopPolling();
-        Log.d(TAG, "ForegroundService destroyed");
+        releaseLocks();
+        unregisterConnectivityReceiver();
+        try {
+            Intent restartIntent = new Intent(this, ForegroundService.class);
+            restartIntent.setPackage(getPackageName());
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(restartIntent);
+            } else {
+                startService(restartIntent);
+            }
+            Log.d(TAG, "ForegroundService self-restarted on destroy");
+        } catch (Exception e) {
+            Log.e(TAG, "ForegroundService self-restart failed: " + e.getMessage());
+        }
+        try {
+            super.onDestroy();
+        } catch (Exception e) {}
+        Log.d(TAG, "ForegroundService destroyed (attempting restart)");
     }
 }

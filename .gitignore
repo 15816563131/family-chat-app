@@ -71,7 +71,6 @@ debug.log
 *.dmg
 
 # APK构建文件
-*.apk
 android-sdk/
 build-apk.js
 download-android-studio.ps1

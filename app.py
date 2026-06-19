@@ -104,6 +104,33 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
+@app.route('/api/apk/info')
+def apk_info():
+    apk_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'family-chat.apk')
+    if not os.path.exists(apk_path):
+        return jsonify({'available': False, 'message': '暂无安装包，请稍后重试'}), 200
+    apk_size = os.path.getsize(apk_path)
+    apk_mtime = datetime.fromtimestamp(os.path.getmtime(apk_path))
+    return jsonify({
+        'available': True,
+        'version': 'v2.0.0',
+        'size_mb': round(apk_size / (1024 * 1024), 1),
+        'size_bytes': apk_size,
+        'updated_at': apk_mtime.isoformat(),
+        'download_url': '/api/apk/download',
+        'install_tip': '下载完成后点击APK文件安装（如提示"未知来源"请允许安装）'
+    }), 200
+
+
+@app.route('/api/apk/download')
+def download_apk():
+    apk_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'family-chat.apk')
+    if not os.path.exists(apk_path):
+        return jsonify({'error': '安装包暂不可用'}), 404
+    logger.info(f'APK download requested: {apk_path}')
+    return send_file(apk_path, as_attachment=True, download_name='family-chat.apk', mimetype='application/vnd.android.package-archive')
+
+
 @app.route('/api/avatar/upload/<int:user_id>', methods=['POST'])
 def upload_avatar(user_id):
     user = User.query.get(user_id)
