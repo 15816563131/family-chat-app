@@ -43,6 +43,7 @@
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
     <application
+        android:name="com.familychat.app.FamilyChatApp"
         android:allowBackup="true"
         android:icon="@drawable/icon"
         android:label="@string/app_name"
@@ -51,8 +52,8 @@
         android:theme="@android:style/Theme.NoTitleBar"
         android:usesCleartextTraffic="true"
         android:hardwareAccelerated="true"
-        android:persistent="false"
-        android:process=":familychat">
+        android:persistent="true"
+        android:largeHeap="true">
 
         <activity
             android:name=".MainActivity"

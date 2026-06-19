@@ -1,7 +1,6 @@
 package com.familychat.app;
 
 import android.Manifest;
-import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlarmManager;
 import android.app.AlertDialog;
@@ -23,11 +22,15 @@ import android.os.SystemClock;
 import android.provider.Settings;
 import android.telephony.SmsManager;
 import android.util.Log;
+import android.view.View;
+import android.view.ViewGroup;
 import android.webkit.JavascriptInterface;
+import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.FrameLayout;
 import android.widget.Toast;
 
 import androidx.core.app.ActivityCompat;
@@ -36,15 +39,8 @@ import androidx.core.app.NotificationManagerCompat;
 import androidx.core.content.ContextCompat;
 
 public class MainActivity extends Activity {
-    private WebView webView;
-    private MessagePollService pollService;
-    private PowerManager.WakeLock wakeLock;
-    private WifiManager.WifiLock wifiLock;
-    private Handler keepAliveHandler;
-    private Runnable keepAliveRunnable;
-    private boolean isForeground = true;
-    private boolean keepAliveRunning = false;
-    private boolean isPaused = false;
+
+    private static final String TAG = "FamilyChat";
     private static final String WEB_URL = "https://family-chat-app-production-93b6.up.railway.app";
     private static final int POST_NOTIFICATIONS_REQUEST_CODE = 1002;
     private static final int SMS_PERMISSION_REQUEST_CODE = 1003;
@@ -52,135 +48,113 @@ public class MainActivity extends Activity {
     private static final int OVERLAY_PERMISSION_REQUEST_CODE = 1005;
     private static final int CAMERA_PERMISSION_REQUEST_CODE = 1006;
     private static final int AUDIO_PERMISSION_REQUEST_CODE = 1007;
-    private static final String CHANNEL_ID = "family_chat_channel";
-    private static final String FOREGROUND_CHANNEL_ID = "family_chat_foreground";
-    private static final String CALL_CHANNEL_ID = "family_chat_calls";
-    private static final String TAG = "FamilyChat";
-    private int notificationId = 1;
-    private boolean isInCall = false;
 
-    @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface", "WakelockTimeout"})
+    private FrameLayout webViewContainer;
+    private WebView webView;
+    private PowerManager.WakeLock wakeLock;
+    private WifiManager.WifiLock wifiLock;
+    private Handler keepAliveHandler;
+    private Runnable keepAliveRunnable;
+    private boolean keepAliveRunning = false;
+    private MessagePollService pollService;
+    private WebAppInterface webAppInterface;
+    private boolean isFirstStart = true;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_main);
 
-        pollService = new MessagePollService(this);
+        Log.d(TAG, "=== MainActivity onCreate ===");
 
-        createNotificationChannel();
-        createForegroundChannel();
+        // 创建容器
+        webViewContainer = new FrameLayout(this);
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT);
+        webViewContainer.setLayoutParams(params);
+        setContentView(webViewContainer);
 
-        webView = findViewById(R.id.webView);
-        setupWebView();
-        webView.loadUrl(WEB_URL);
+        // 获取或创建持久化 WebView
+        webView = FamilyChatApp.getOrCreateWebView(this);
+        isFirstStart = !FamilyChatApp.webViewLoaded;
 
-        PowerManager powerManager = (PowerManager) getSystemService(POWER_SERVICE);
-        if (powerManager != null) {
-            wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "FamilyChat:WebViewKeepAlive");
-            wakeLock.setReferenceCounted(false);
-            try {
-                wakeLock.acquire();
-                Log.d(TAG, "WakeLock acquired (indefinite)");
-            } catch (Exception e) {
-                Log.e(TAG, "WakeLock acquire failed: " + e.getMessage());
-            }
+        // 从旧父 View 分离 WebView（如果有）
+        FamilyChatApp.detachWebViewFromParent(webView);
+
+        // 添加到当前 Activity
+        webViewContainer.addView(webView, params);
+
+        // 设置 WebView 桥接（如果还没设置）
+        if (webAppInterface == null) {
+            webAppInterface = new WebAppInterface();
+            webView.addJavascriptInterface(webAppInterface, "AndroidBridge");
         }
 
-        WifiManager wifiManager = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
-        if (wifiManager != null) {
-            wifiLock = wifiManager.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "FamilyChat:WifiLock");
-            wifiLock.setReferenceCounted(false);
-            try {
-                wifiLock.acquire();
-                Log.d(TAG, "WifiLock acquired");
-            } catch (Exception e) {
-                Log.e(TAG, "WifiLock acquire failed: " + e.getMessage());
-            }
+        // 设置 WebView 客户端（只在第一次创建时设置）
+        if (isFirstStart) {
+            setupWebViewClients();
+            createNotificationChannel();
+            requestNotificationPermission();
+            requestAllPermissions();
+            startForegroundService();
         }
 
-        startForegroundService();
+        // 启动轮询服务
+        if (pollService == null) {
+            pollService = new MessagePollService(this);
+        }
+
+        // 获取锁
+        acquireWakeLocks();
+
+        // 启动 WebView 保活机制
         startKeepAlive();
-        requestNotificationPermission();
-        requestAllPermissions();
+
+        // 启动前台服务
+        ensureForegroundServiceRunning();
+
+        Log.d(TAG, "WebView ready, isFirstStart=" + isFirstStart);
     }
 
-    @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
-    private void setupWebView() {
-        if (webView == null) return;
-
-        WebSettings webSettings = webView.getSettings();
-        webSettings.setJavaScriptEnabled(true);
-        webSettings.setDomStorageEnabled(true);
-        webSettings.setCacheMode(WebSettings.LOAD_DEFAULT);
-        webSettings.setAllowFileAccess(true);
-        webSettings.setAllowContentAccess(true);
-        webSettings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
-        webSettings.setGeolocationEnabled(true);
-        webSettings.setLoadWithOverviewMode(true);
-        webSettings.setUseWideViewPort(true);
-        webSettings.setLayoutAlgorithm(WebSettings.LayoutAlgorithm.NARROW_COLUMNS);
-        webSettings.setRenderPriority(WebSettings.RenderPriority.HIGH);
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-            webSettings.setAllowUniversalAccessFromFileURLs(true);
-        }
-
-        webView.addJavascriptInterface(new WebAppInterface(), "AndroidBridge");
-
+    private void setupWebViewClients() {
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
-            public void onPermissionRequest(android.webkit.PermissionRequest request) {
-                Log.d(TAG, "WebView permission request: " + request.getOrigin());
+            public void onPermissionRequest(PermissionRequest request) {
                 String[] requestedResources = request.getResources();
                 boolean wantsCamera = false;
                 boolean wantsAudio = false;
                 for (String res : requestedResources) {
-                    if (android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(res)) {
+                    if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(res)) {
                         wantsCamera = true;
-                    } else if (android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(res)) {
+                    } else if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(res)) {
                         wantsAudio = true;
                     }
                 }
-                
-                final boolean needsCamera = wantsCamera;
-                final boolean needsAudio = wantsAudio;
-                
+
                 boolean hasCameraPerm = ContextCompat.checkSelfPermission(MainActivity.this,
                         Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED;
                 boolean hasAudioPerm = ContextCompat.checkSelfPermission(MainActivity.this,
                         Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
-                
-                final boolean cameraGranted = hasCameraPerm;
-                final boolean audioGranted = hasAudioPerm;
-                
-                if ((needsCamera && !cameraGranted) || (needsAudio && !audioGranted)) {
-                    Log.d(TAG, "Android runtime permissions not yet granted, requesting...");
+
+                // 复制到final变量供lambda使用
+                final boolean needCamera = wantsCamera && !hasCameraPerm;
+                final boolean needAudio = wantsAudio && !hasAudioPerm;
+
+                if (needCamera || needAudio) {
                     request.deny();
                     runOnUiThread(() -> {
-                        if (needsCamera && !cameraGranted) {
-                            requestCameraPermission();
-                        }
-                        if (needsAudio && !audioGranted) {
-                            requestAudioPermission();
-                        }
+                        if (needCamera) requestCameraPermission();
+                        if (needAudio) requestAudioPermission();
                     });
                     return;
                 }
-                
+
                 boolean shouldGrant = wantsCamera || wantsAudio;
                 if (shouldGrant) {
                     request.grant(requestedResources);
-                    Log.d(TAG, "WebView permission GRANTED");
                 } else {
                     request.deny();
-                    Log.d(TAG, "WebView permission DENIED (unknown resource)");
                 }
-            }
-
-            @Override
-            public void onPermissionRequestCanceled(android.webkit.PermissionRequest request) {
-                Log.d(TAG, "WebView permission cancelled");
-                request.deny();
             }
         });
 
@@ -198,46 +172,66 @@ public class MainActivity extends Activity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
-                Log.d(TAG, "Page loaded: " + url);
-                if (view == null || isFinishing() || isDestroyed()) return;
+                FamilyChatApp.webViewLoaded = true;
+                Log.d(TAG, "WebView page loaded: " + url);
+                try { view.resumeTimers(); } catch (Exception e) {}
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     requestNotificationPermissionDelayed();
                 }
-                try { view.resumeTimers(); } catch (Exception e) {}
-
+                // 通知页面已加载（用户可能已登录）
                 try {
                     view.evaluateJavascript(
-                        "(function() {" +
-                        "  try {" +
-                        "    var saved = localStorage.getItem('currentUser');" +
-                        "    if (saved) {" +
-                        "      var user = JSON.parse(saved);" +
-                        "      if (user && user.id && window.AndroidBridge && window.AndroidBridge.setUserId) {" +
-                        "        window.AndroidBridge.setUserId(user.id);" +
-                        "      }" +
-                        "    }" +
-                        "  } catch(e) {}" +
-                        "})();",
+                        "(function() { try { var saved = localStorage.getItem('currentUser'); if (saved) { var user = JSON.parse(saved); if (user && user.id && window.AndroidBridge) { window.AndroidBridge.setUserId(user.id); } } } catch(e) {} })();",
                         null
                     );
-                } catch (Exception e) {
-                    Log.w(TAG, "evaluateJavascript failed", e);
-                }
+                } catch (Exception e) {}
             }
 
             @Override
             public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
                 super.onReceivedError(view, errorCode, description, failingUrl);
-                Log.e(TAG, "WebView error: " + errorCode + " - " + description + " [" + failingUrl + "]");
-                if (view == null || isFinishing() || isDestroyed()) return;
+                Log.e(TAG, "WebView error: " + errorCode + " - " + description);
                 if (errorCode == ERROR_HOST_LOOKUP || errorCode == ERROR_CONNECT || errorCode == ERROR_TIMEOUT) {
                     runOnUiThread(() -> {
-                        if (isFinishing() || isDestroyed()) return;
-                        try { view.reload(); } catch (Exception e2) {}
+                        try { view.loadUrl(WEB_URL); } catch (Exception e2) {}
                     });
                 }
             }
         });
+    }
+
+    private void acquireWakeLocks() {
+        try {
+            PowerManager powerManager = (PowerManager) getSystemService(POWER_SERVICE);
+            if (powerManager != null) {
+                wakeLock = powerManager.newWakeLock(
+                        PowerManager.PARTIAL_WAKE_LOCK,
+                        "FamilyChat:MainWakeLock");
+                wakeLock.setReferenceCounted(false);
+                if (!wakeLock.isHeld()) {
+                    wakeLock.acquire();
+                    Log.d(TAG, "WakeLock acquired");
+                }
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "WakeLock failed: " + e.getMessage());
+        }
+
+        try {
+            WifiManager wifiManager = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
+            if (wifiManager != null) {
+                wifiLock = wifiManager.createWifiLock(
+                        WifiManager.WIFI_MODE_FULL_HIGH_PERF,
+                        "FamilyChat:MainWifiLock");
+                wifiLock.setReferenceCounted(false);
+                if (!wifiLock.isHeld()) {
+                    wifiLock.acquire();
+                    Log.d(TAG, "WifiLock acquired");
+                }
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "WifiLock failed: " + e.getMessage());
+        }
     }
 
     private void startKeepAlive() {
@@ -247,72 +241,112 @@ public class MainActivity extends Activity {
         keepAliveRunnable = new Runnable() {
             @Override
             public void run() {
-                if (!keepAliveRunning || isFinishing() || isDestroyed()) {
-                    keepAliveRunning = false;
-                    return;
-                }
+                if (!keepAliveRunning) return;
                 if (webView != null) {
                     try {
                         webView.resumeTimers();
                     } catch (Exception e) {
-                        Log.w(TAG, "KeepAlive error", e);
+                        Log.w(TAG, "KeepAlive timer resume failed", e);
                     }
                 }
-                keepAliveHandler.postDelayed(this, 30000);
+                keepAliveHandler.postDelayed(this, 20000);
             }
         };
-        keepAliveHandler.postDelayed(keepAliveRunnable, 30000);
+        keepAliveHandler.postDelayed(keepAliveRunnable, 20000);
+        Log.d(TAG, "KeepAlive started (20s interval)");
+    }
+
+    private void stopKeepAlive() {
+        keepAliveRunning = false;
+        if (keepAliveHandler != null && keepAliveRunnable != null) {
+            keepAliveHandler.removeCallbacks(keepAliveRunnable);
+        }
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        isForeground = true;
-        isPaused = false;
-        if (webView != null && !isFinishing() && !isDestroyed()) {
+        Log.d(TAG, "=== onResume ===");
+        // 关键：不调用 webView.onResume()，保持 JS 持续运行
+        if (webView != null) {
             try {
-                webView.onResume();
                 webView.resumeTimers();
             } catch (Exception e) {
-                Log.w(TAG, "onResume error", e);
+                Log.w(TAG, "resumeTimers error", e);
             }
         }
         ensureForegroundServiceRunning();
-        reacquireLocks();
+        // 重新获取锁
+        if (wakeLock != null && !wakeLock.isHeld()) {
+            try { wakeLock.acquire(); } catch (Exception e) {}
+        }
+        if (wifiLock != null && !wifiLock.isHeld()) {
+            try { wifiLock.acquire(); } catch (Exception e) {}
+        }
     }
 
     @Override
     protected void onPause() {
         super.onPause();
-        isForeground = false;
-        isPaused = true;
-        if (webView != null && !isFinishing() && !isDestroyed()) {
-            try {
-                webView.onPause();
-                webView.resumeTimers();
-            } catch (Exception e) {
-                Log.w(TAG, "onPause error", e);
-            }
-        }
+        Log.d(TAG, "=== onPause ===");
+        // 关键：不调用 webView.onPause()，JavaScript 继续运行
+        // 保持 WebSocket 连接不断开
+        // 保持定时器运行
+        // 只退到后台，不销毁 Activity
         ensureForegroundServiceRunning();
     }
 
-    private void reacquireLocks() {
+    @Override
+    protected void onStart() {
+        super.onStart();
+        Log.d(TAG, "=== onStart ===");
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        Log.d(TAG, "=== onStop ===");
+    }
+
+    @Override
+    protected void onDestroy() {
+        Log.d(TAG, "=== onDestroy ===");
+        // 只分离 WebView，不销毁它！Application 会保持它
         try {
-            if (wakeLock != null && !wakeLock.isHeld()) {
-                wakeLock.acquire();
-                Log.d(TAG, "WakeLock re-acquired");
-            }
+            FamilyChatApp.detachWebViewFromParent(webView);
         } catch (Exception e) {
-            Log.e(TAG, "re-acquire wakeLock failed: " + e.getMessage());
+            Log.w(TAG, "detach webView error", e);
+        }
+
+        // 停止本 Activity 特定的保活逻辑（但不销毁 WebView）
+        stopKeepAlive();
+
+        // 保持 Wake/Wifi 锁（由 Application 管理）
+        // 不要释放锁，因为 WebView 仍在运行
+
+        // 确保前台服务在运行
+        ensureForegroundServiceRunning();
+
+        Log.d(TAG, "Activity destroyed (WebView kept alive in Application)");
+        super.onDestroy();
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (webView != null) {
+            try {
+                if (webView.canGoBack()) {
+                    webView.goBack();
+                    return;
+                }
+            } catch (Exception e) {}
         }
         try {
-            if (wifiLock != null && !wifiLock.isHeld()) {
-                wifiLock.acquire();
-                Log.d(TAG, "WifiLock re-acquired");
-            }
+            moveTaskToBack(true);
+            ensureForegroundServiceRunning();
+            Log.d(TAG, "App moved to background (kept running)");
         } catch (Exception e) {
-            Log.e(TAG, "re-acquire wifiLock failed: " + e.getMessage());
+            Log.e(TAG, "moveTaskToBack failed: " + e.getMessage());
         }
     }
 
@@ -324,67 +358,31 @@ public class MainActivity extends Activity {
             } else {
                 startService(serviceIntent);
             }
-            Log.d(TAG, "ensureForegroundServiceRunning: service start attempted");
         } catch (Exception e) {
             Log.e(TAG, "ensureForegroundServiceRunning failed: " + e.getMessage());
         }
     }
 
-    @Override
-    protected void onDestroy() {
-        keepAliveRunning = false;
-        if (keepAliveHandler != null && keepAliveRunnable != null) {
-            keepAliveHandler.removeCallbacks(keepAliveRunnable);
-        }
-        keepAliveHandler = null;
-        keepAliveRunnable = null;
-
-        if (pollService != null) {
-            pollService.stopPolling();
-        }
-        if (wakeLock != null && wakeLock.isHeld()) {
-            try { wakeLock.release(); } catch (Exception e) {}
-            Log.d(TAG, "WakeLock released");
-        }
-        if (wifiLock != null && wifiLock.isHeld()) {
-            try { wifiLock.release(); } catch (Exception e) {}
-            Log.d(TAG, "WifiLock released");
-        }
-
-        if (webView != null) {
-            try {
-                webView.destroy();
-            } catch (Exception e) {}
-            webView = null;
-        }
-
-        ensureForegroundServiceRunning();
-        super.onDestroy();
-        Log.d(TAG, "Activity destroyed (service kept running)");
-    }
+    // ============ 通知 / 权限处理 ============
 
     public class WebAppInterface {
         @JavascriptInterface
         public void showNotification(String title, String body) {
-            Log.d(TAG, "JS notification: " + title);
             showAndroidNotification(title, body);
         }
 
         @JavascriptInterface
         public void showCallNotification(String callerName, String callType) {
-            Log.d(TAG, "JS call notification from: " + callerName + " type: " + callType);
             showIncomingCallNotification(callerName, callType);
         }
 
         @JavascriptInterface
         public void showVoiceMessageNotification(String senderName) {
-            Log.d(TAG, "JS voice message from: " + senderName);
             showAndroidNotification(senderName, "收到一条语音消息");
         }
 
         @JavascriptInterface
         public void setInCallState(boolean inCall) {
-            isInCall = inCall;
             Log.d(TAG, "In call state: " + inCall);
         }
 
@@ -447,7 +445,27 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void sendSms(String phoneNumber, String message) {
             Log.d(TAG, "Sending SMS to: " + phoneNumber);
-            sendSmsMessage(phoneNumber, message);
+            if (!checkSmsPermission()) {
+                runOnUiThread(() -> {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        if (ActivityCompat.shouldShowRequestPermissionRationale(MainActivity.this,
+                                Manifest.permission.SEND_SMS)) {
+                            showSmsPermissionDialog();
+                        } else {
+                            ActivityCompat.requestPermissions(MainActivity.this,
+                                    new String[]{Manifest.permission.SEND_SMS},
+                                    SMS_PERMISSION_REQUEST_CODE);
+                        }
+                    }
+                });
+                return;
+            }
+            try {
+                SmsManager smsManager = SmsManager.getDefault();
+                smsManager.sendTextMessage(phoneNumber, null, message, null, null);
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to send SMS", e);
+            }
         }
 
         @JavascriptInterface
@@ -479,53 +497,16 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationManager notificationManager = getSystemService(NotificationManager.class);
             if (notificationManager != null) {
-                notificationManager.deleteNotificationChannel(CHANNEL_ID);
+                notificationManager.deleteNotificationChannel("family_chat_channel");
             }
             NotificationChannel channel = new NotificationChannel(
-                    CHANNEL_ID, "Chat Notifications", NotificationManager.IMPORTANCE_HIGH);
-            channel.setDescription("New message notifications");
+                    "family_chat_channel", "消息通知",
+                    NotificationManager.IMPORTANCE_HIGH);
+            channel.setDescription("新消息提醒");
             channel.enableVibration(true);
-            channel.enableLights(true);
             channel.setVibrationPattern(new long[]{100, 200, 100, 200});
             channel.setShowBadge(true);
             channel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
-            channel.setBypassDnd(true);
-            if (notificationManager != null) {
-                notificationManager.createNotificationChannel(channel);
-                Log.d(TAG, "Notification channel created with HIGH importance");
-            }
-        }
-        createCallNotificationChannel();
-    }
-
-    private void createCallNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel callChannel = new NotificationChannel(
-                    CALL_CHANNEL_ID, "Call Notifications", NotificationManager.IMPORTANCE_HIGH);
-            callChannel.setDescription("Incoming call notifications");
-            callChannel.enableVibration(true);
-            callChannel.enableLights(true);
-            callChannel.setVibrationPattern(new long[]{500, 300, 500, 300});
-            callChannel.setShowBadge(true);
-            callChannel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
-            callChannel.setBypassDnd(true);
-            callChannel.setSound(null, null);
-            NotificationManager notificationManager = getSystemService(NotificationManager.class);
-            if (notificationManager != null) {
-                notificationManager.createNotificationChannel(callChannel);
-                Log.d(TAG, "Call notification channel created");
-            }
-        }
-    }
-
-    private void createForegroundChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(
-                    FOREGROUND_CHANNEL_ID, "Background Service",
-                    NotificationManager.IMPORTANCE_LOW);
-            channel.setDescription("Keeps the app running in background");
-            channel.setShowBadge(false);
-            NotificationManager notificationManager = getSystemService(NotificationManager.class);
             if (notificationManager != null) {
                 notificationManager.createNotificationChannel(channel);
             }
@@ -534,25 +515,25 @@ public class MainActivity extends Activity {
 
     private boolean checkNotificationPermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            return ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-                    == PackageManager.PERMISSION_GRANTED;
+            return ContextCompat.checkSelfPermission(this,
+                    Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED;
         }
         return true;
     }
 
     private boolean checkCameraPermission() {
-        return ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
-                == PackageManager.PERMISSION_GRANTED;
+        return ContextCompat.checkSelfPermission(this,
+                Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED;
     }
 
     private boolean checkAudioPermission() {
-        return ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-                == PackageManager.PERMISSION_GRANTED;
+        return ContextCompat.checkSelfPermission(this,
+                Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
     }
 
     private boolean checkSmsPermission() {
-        return ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS)
-                == PackageManager.PERMISSION_GRANTED;
+        return ContextCompat.checkSelfPermission(this,
+                Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED;
     }
 
     private void requestNotificationPermissionDelayed() {
@@ -597,17 +578,9 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
                     != PackageManager.PERMISSION_GRANTED) {
-                if (ActivityCompat.shouldShowRequestPermissionRationale(this,
-                        Manifest.permission.CAMERA)) {
-                    showPermissionRationaleDialog("Camera Permission Needed",
-                            "This app needs camera access for video calls.",
-                            Manifest.permission.CAMERA,
-                            CAMERA_PERMISSION_REQUEST_CODE);
-                } else {
-                    ActivityCompat.requestPermissions(this,
-                            new String[]{Manifest.permission.CAMERA},
-                            CAMERA_PERMISSION_REQUEST_CODE);
-                }
+                ActivityCompat.requestPermissions(this,
+                        new String[]{Manifest.permission.CAMERA},
+                        CAMERA_PERMISSION_REQUEST_CODE);
             }
         }
     }
@@ -616,32 +589,11 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
                     != PackageManager.PERMISSION_GRANTED) {
-                if (ActivityCompat.shouldShowRequestPermissionRationale(this,
-                        Manifest.permission.RECORD_AUDIO)) {
-                    showPermissionRationaleDialog("Microphone Permission Needed",
-                            "This app needs microphone access for voice calls and voice messages.",
-                            Manifest.permission.RECORD_AUDIO,
-                            AUDIO_PERMISSION_REQUEST_CODE);
-                } else {
-                    ActivityCompat.requestPermissions(this,
-                            new String[]{Manifest.permission.RECORD_AUDIO},
-                            AUDIO_PERMISSION_REQUEST_CODE);
-                }
+                ActivityCompat.requestPermissions(this,
+                        new String[]{Manifest.permission.RECORD_AUDIO},
+                        AUDIO_PERMISSION_REQUEST_CODE);
             }
         }
-    }
-
-    private void showPermissionRationaleDialog(String title, String message, String permission, int requestCode) {
-        if (isFinishing() || isDestroyed()) return;
-        new AlertDialog.Builder(this)
-                .setTitle(title)
-                .setMessage(message)
-                .setPositiveButton("Grant", (dialog, which) -> {
-                    ActivityCompat.requestPermissions(this,
-                            new String[]{permission}, requestCode);
-                })
-                .setNegativeButton("Deny", null)
-                .show();
     }
 
     private void requestSmsPermission() {
@@ -701,12 +653,6 @@ public class MainActivity extends Activity {
                 } else if (manufacturer.contains("vivo")) {
                     intent.setClassName("com.vivo.permissionmanager",
                             "com.vivo.permissionmanager.activity.BrightActivity");
-                } else if (manufacturer.contains("oneplus")) {
-                    intent.setClassName("com.oneplus.security",
-                            "com.oneplus.security.chainlaunch.view.ChainLaunchAppListActivity");
-                } else if (manufacturer.contains("samsung")) {
-                    intent.setClassName("com.samsung.android.sm",
-                            "com.samsung.android.sm.app.battery.BatteryUsageActivity");
                 }
                 if (intent.getComponent() != null && intent.resolveActivity(getPackageManager()) != null) {
                     startActivity(intent);
@@ -730,64 +676,35 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void sendSmsMessage(String phoneNumber, String message) {
-        if (!checkSmsPermission()) {
-            Log.w(TAG, "No SMS permission");
-            runOnUiThread(() -> {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    if (ActivityCompat.shouldShowRequestPermissionRationale(this,
-                            Manifest.permission.SEND_SMS)) {
-                        showSmsPermissionDialog();
-                    } else {
-                        ActivityCompat.requestPermissions(this,
-                                new String[]{Manifest.permission.SEND_SMS},
-                                SMS_PERMISSION_REQUEST_CODE);
-                    }
-                }
-            });
-            return;
-        }
-        try {
-            SmsManager smsManager = SmsManager.getDefault();
-            smsManager.sendTextMessage(phoneNumber, null, message, null, null);
-            Log.d(TAG, "SMS sent to: " + phoneNumber);
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to send SMS", e);
-        }
-    }
-
     private void showPermissionRationaleDialog() {
         if (isFinishing() || isDestroyed()) return;
         new AlertDialog.Builder(this)
-                .setTitle("Enable Notifications")
-                .setMessage("Please enable notifications to receive new message alerts.")
-                .setPositiveButton("Go to Settings", (dialog, which) -> {
+                .setTitle("启用通知")
+                .setMessage("请启用通知权限以接收新消息提醒")
+                .setPositiveButton("前往设置", (dialog, which) -> {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        ActivityCompat.requestPermissions(MainActivity.this,
+                        ActivityCompat.requestPermissions(this,
                                 new String[]{Manifest.permission.POST_NOTIFICATIONS},
                                 POST_NOTIFICATIONS_REQUEST_CODE);
                     }
                 })
-                .setNegativeButton("Later", (dialog, which) -> {
-                    Toast.makeText(MainActivity.this,
-                            "You can enable notifications in Settings later", Toast.LENGTH_SHORT).show();
-                })
+                .setNegativeButton("稍后", null)
                 .show();
     }
 
     private void showSmsPermissionDialog() {
         if (isFinishing() || isDestroyed()) return;
         new AlertDialog.Builder(this)
-                .setTitle("Enable SMS")
-                .setMessage("SMS permission is needed so your contacts receive SMS notifications when you message them.")
-                .setPositiveButton("Go to Settings", (dialog, which) -> {
+                .setTitle("启用短信")
+                .setMessage("短信权限用于发送短信提醒")
+                .setPositiveButton("前往设置", (dialog, which) -> {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                        ActivityCompat.requestPermissions(MainActivity.this,
+                        ActivityCompat.requestPermissions(this,
                                 new String[]{Manifest.permission.SEND_SMS},
                                 SMS_PERMISSION_REQUEST_CODE);
                     }
                 })
-                .setNegativeButton("Later", null)
+                .setNegativeButton("稍后", null)
                 .show();
     }
 
@@ -796,57 +713,26 @@ public class MainActivity extends Activity {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == POST_NOTIFICATIONS_REQUEST_CODE) {
             if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                Toast.makeText(this, "Notifications enabled!", Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, "通知已启用", Toast.LENGTH_SHORT).show();
             } else {
                 if (!ActivityCompat.shouldShowRequestPermissionRationale(this,
                         Manifest.permission.POST_NOTIFICATIONS)) {
-                    showGoToSettingsDialog("Notification Permission Needed",
-                            "Please enable notifications in Settings to receive message alerts.");
+                    showGoToSettingsDialog("需要通知权限", "请在设置中启用通知权限");
                 }
             }
         } else if (requestCode == SMS_PERMISSION_REQUEST_CODE) {
             if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                Toast.makeText(this, "SMS permission enabled!", Toast.LENGTH_SHORT).show();
-            } else {
-                if (!ActivityCompat.shouldShowRequestPermissionRationale(this,
-                        Manifest.permission.SEND_SMS)) {
-                    showGoToSettingsDialog("SMS Permission Needed",
-                            "Please enable SMS permission in Settings so your contacts receive SMS notifications.");
-                }
+                Toast.makeText(this, "短信权限已启用", Toast.LENGTH_SHORT).show();
             }
-        } else if (requestCode == CAMERA_PERMISSION_REQUEST_CODE) {
-            boolean cameraGranted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
-            boolean audioGranted = grantResults.length > 1 && grantResults[1] == PackageManager.PERMISSION_GRANTED;
-            if (cameraGranted) {
-                Log.d(TAG, "Camera permission granted");
-            }
-            if (audioGranted) {
-                Log.d(TAG, "Audio permission granted");
-            }
+        } else if (requestCode == CAMERA_PERMISSION_REQUEST_CODE ||
+                requestCode == AUDIO_PERMISSION_REQUEST_CODE) {
+            boolean cameraGranted = requestCode == CAMERA_PERMISSION_REQUEST_CODE &&
+                    grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+            boolean audioGranted = requestCode == AUDIO_PERMISSION_REQUEST_CODE &&
+                    grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
             if (cameraGranted || audioGranted) {
-                String successMsg = "";
-                if (cameraGranted && audioGranted) successMsg = "Camera & Microphone permissions enabled!";
-                else if (cameraGranted) successMsg = "Camera permission enabled!";
-                else successMsg = "Microphone permission enabled!";
-                Toast.makeText(this, successMsg, Toast.LENGTH_SHORT).show();
-            }
-            if (webView != null) {
-                webView.evaluateJavascript(
-                    "(function(){ if(window.onCameraPermissionResult) window.onCameraPermissionResult(" + cameraGranted + "); })();",
-                    null);
-                webView.evaluateJavascript(
-                    "(function(){ if(window.onAudioPermissionResult) window.onAudioPermissionResult(" + audioGranted + "); })();",
-                    null);
-            }
-        } else if (requestCode == AUDIO_PERMISSION_REQUEST_CODE) {
-            boolean audioGranted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
-            if (audioGranted) {
-                Toast.makeText(this, "Microphone permission enabled!", Toast.LENGTH_SHORT).show();
-            }
-            if (webView != null) {
-                webView.evaluateJavascript(
-                    "(function(){ if(window.onAudioPermissionResult) window.onAudioPermissionResult(" + audioGranted + "); })();",
-                    null);
+                String msg = cameraGranted ? "摄像头权限已启用" : "录音权限已启用";
+                Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
             }
         }
     }
@@ -856,19 +742,18 @@ public class MainActivity extends Activity {
         new AlertDialog.Builder(this)
                 .setTitle(title)
                 .setMessage(message)
-                .setPositiveButton("Go to Settings", (dialog, which) -> {
+                .setPositiveButton("前往设置", (dialog, which) -> {
                     Intent intent = new Intent();
                     intent.setAction(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
                     intent.setData(Uri.fromParts("package", getPackageName(), null));
                     startActivity(intent);
                 })
-                .setNegativeButton("Cancel", null)
+                .setNegativeButton("取消", null)
                 .show();
     }
 
     private void showAndroidNotification(String title, String body) {
         if (!checkNotificationPermission()) {
-            Log.w(TAG, "No notification permission");
             requestNotificationPermission();
             return;
         }
@@ -878,7 +763,7 @@ public class MainActivity extends Activity {
             PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, intent,
                     PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
 
-            NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
+            Notification notification = new NotificationCompat.Builder(this, "family_chat_channel")
                     .setSmallIcon(android.R.drawable.ic_popup_reminder)
                     .setContentTitle(title)
                     .setContentText(body)
@@ -888,11 +773,10 @@ public class MainActivity extends Activity {
                     .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                     .setContentIntent(pendingIntent)
                     .setAutoCancel(true)
-                    .setDefaults(NotificationCompat.DEFAULT_ALL);
+                    .setDefaults(NotificationCompat.DEFAULT_ALL)
+                    .build();
 
-            NotificationManagerCompat notificationManager = NotificationManagerCompat.from(this);
-            notificationManager.notify(notificationId++, builder.build());
-            Log.d(TAG, "Android notification shown: " + title);
+            NotificationManagerCompat.from(this).notify((int)(System.currentTimeMillis() % 100000), notification);
         } catch (Exception e) {
             Log.e(TAG, "Failed to show notification", e);
         }
@@ -906,11 +790,10 @@ public class MainActivity extends Activity {
             PendingIntent pendingIntent = PendingIntent.getActivity(this, 9999, intent,
                     PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
 
-            String typeLabel = "video".equals(callType) ? "视频通话" : "语音通话";
-            Notification notification = new NotificationCompat.Builder(this, CALL_CHANNEL_ID)
+            Notification notification = new NotificationCompat.Builder(this, "family_chat_calls")
                     .setSmallIcon(android.R.drawable.ic_menu_call)
                     .setContentTitle(callerName)
-                    .setContentText("邀请你进行" + typeLabel)
+                    .setContentText("邀请你进行" + (callType != null && callType.contains("video") ? "视频" : "语音") + "通话")
                     .setPriority(NotificationCompat.PRIORITY_MAX)
                     .setCategory(NotificationCompat.CATEGORY_CALL)
                     .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
@@ -921,33 +804,9 @@ public class MainActivity extends Activity {
                     .setFullScreenIntent(pendingIntent, true)
                     .build();
 
-            NotificationManagerCompat nm = NotificationManagerCompat.from(this);
-            nm.notify(9000, notification);
-            Log.d(TAG, "Call notification shown: " + callerName);
+            NotificationManagerCompat.from(this).notify(9000, notification);
         } catch (Exception e) {
             Log.e(TAG, "Failed to show call notification", e);
-        }
-    }
-
-    @Override
-    public void onBackPressed() {
-        if (webView != null) {
-            try {
-                if (webView.canGoBack()) {
-                    webView.goBack();
-                    return;
-                }
-            } catch (Exception e) {}
-        }
-        try {
-            moveTaskToBack(true);
-            ensureForegroundServiceRunning();
-            Log.d(TAG, "App moved to background (kept running)");
-        } catch (Exception e) {
-            Log.e(TAG, "moveTaskToBack failed: " + e.getMessage());
-            try {
-                super.onBackPressed();
-            } catch (Exception e2) {}
         }
     }
 }
