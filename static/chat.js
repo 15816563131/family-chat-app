@@ -1437,14 +1437,25 @@ function handleKeyPress(event) {
     }
 }
 
-function updateUserAvatar() {
+function updateUserAvatar(avatarUrl) {
     const avatarInitial = getAvatarInitial(currentUser.username);
-    const avatarElements = document.querySelectorAll('#user-avatar, #profile-avatar');
-    avatarElements.forEach(el => {
-        if (el) el.textContent = avatarInitial;
-    });
     const initialElement = document.getElementById('user-avatar-initial');
-    if (initialElement) initialElement.textContent = avatarInitial;
+    
+    if (avatarUrl) {
+        const imgElement = document.getElementById('user-avatar-img');
+        if (imgElement) {
+            imgElement.src = avatarUrl + '?t=' + Date.now();
+            imgElement.style.display = 'block';
+        }
+        if (initialElement) initialElement.style.display = 'none';
+    } else {
+        const imgElement = document.getElementById('user-avatar-img');
+        if (imgElement) imgElement.style.display = 'none';
+        if (initialElement) {
+            initialElement.style.display = 'flex';
+            initialElement.textContent = avatarInitial;
+        }
+    }
 }
 
 function switchTab(tab) {
@@ -1468,7 +1479,19 @@ async function openProfile() {
         const response = await fetch(`/api/user/${currentUser.id}`);
         const user = await response.json();
         
-        document.getElementById('profile-avatar-initial').textContent = getAvatarInitial(user.username);
+        // 显示头像（如果有则显示图片，否则显示初始字母）
+        const imgElement = document.getElementById('profile-avatar-img');
+        const initialElement = document.getElementById('profile-avatar-initial');
+        if (user.avatar) {
+            imgElement.src = user.avatar + '?t=' + Date.now();
+            imgElement.style.display = 'block';
+            initialElement.style.display = 'none';
+        } else {
+            imgElement.style.display = 'none';
+            initialElement.style.display = 'block';
+            initialElement.textContent = getAvatarInitial(user.username);
+        }
+        
         document.getElementById('profile-username').value = user.username || '';
         document.getElementById('profile-bio').value = user.bio || '';
         document.getElementById('profile-password').value = '';
@@ -1771,6 +1794,8 @@ async function uploadAvatar(event) {
             imgElement.src = data.avatar_url + '?t=' + Date.now();
             imgElement.style.display = 'block';
             initialElement.style.display = 'none';
+            // 同时更新侧边栏头像
+            updateUserAvatar(data.avatar_url);
             alert('头像上传成功！');
         } else {
             alert(data.error || '上传失败');
@@ -1972,7 +1997,19 @@ function initChat() {
     document.getElementById('chat-container').style.display = 'flex';
     document.getElementById('current-user').textContent = `欢迎, ${currentUser.username}`;
     
-    updateUserAvatar();
+    // 从服务器加载用户信息（包括头像）
+    fetch('/api/user/' + currentUser.id)
+        .then(function(r) { return r.json(); })
+        .then(function(user) {
+            if (user && user.avatar) {
+                updateUserAvatar(user.avatar);
+            } else {
+                updateUserAvatar();
+            }
+        })
+        .catch(function() {
+            updateUserAvatar();
+        });
     
     socket = io({
         transports: ['websocket', 'polling'],
