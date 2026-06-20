@@ -1823,3 +1823,470 @@ body {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
 }
+
+/* ===== Group UI ===== */
+.group-item {
+    padding: 12px 16px;
+    background: transparent;
+    cursor: pointer;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    border-bottom: 1px solid rgba(229, 229, 229, 0.6);
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.group-item:hover {
+    background: rgba(247, 247, 247, 0.95);
+    transform: translateX(4px);
+}
+.group-item.active {
+    background: rgba(7, 193, 96, 0.12);
+    border-left: 3px solid var(--wechat-green);
+}
+.group-name {
+    font-weight: 500;
+    font-size: 15px;
+    color: var(--wechat-text-primary);
+}
+.group-member-count {
+    font-size: 12px;
+    color: var(--wechat-text-light);
+}
+.group-avatar {
+    width: 38px;
+    height: 38px;
+    border-radius: 6px;
+    background: var(--wechat-green);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    font-weight: 600;
+    flex-shrink: 0;
+}
+.group-actions {
+    display: flex;
+    gap: 6px;
+}
+.group-btn {
+    padding: 6px 12px;
+    background: linear-gradient(135deg, #07c160 0%, #06ad56 100%);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+.group-btn:hover {
+    transform: scale(1.05);
+    box-shadow: 0 2px 8px rgba(7, 193, 96, 0.3);
+}
+.group-modal .modal-content {
+    max-width: 500px;
+}
+.group-member-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--wechat-border);
+}
+.role-badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-weight: 500;
+}
+.role-badge.owner {
+    background: rgba(255, 215, 0, 0.2);
+    color: #b8860b;
+}
+.role-badge.admin {
+    background: rgba(7, 193, 96, 0.15);
+    color: #07c160;
+}
+.role-badge.member {
+    background: rgba(0, 0, 0, 0.05);
+    color: var(--wechat-text-secondary);
+}
+.remove-member-btn {
+    padding: 4px 10px;
+    background: none;
+    border: 1px solid #f44336;
+    border-radius: 6px;
+    color: #f44336;
+    font-size: 12px;
+    cursor: pointer;
+    margin-left: auto;
+    transition: all 0.2s;
+}
+.remove-member-btn:hover {
+    background: #f44336;
+    color: white;
+}
+.announcement-box {
+    border: 1px solid var(--wechat-border);
+    border-radius: 8px;
+    padding: 12px;
+    background: rgba(247, 247, 247, 0.6);
+    position: relative;
+}
+.announcement-text {
+    font-size: 13px;
+    color: var(--wechat-text-secondary);
+    line-height: 1.6;
+}
+.announcement-edit {
+    width: 100%;
+    min-height: 80px;
+    padding: 10px;
+    border: 1px solid var(--wechat-border);
+    border-radius: 8px;
+    font-size: 13px;
+    resize: vertical;
+    font-family: inherit;
+}
+.announcement-edit:focus {
+    outline: none;
+    border-color: var(--wechat-green);
+}
+.group-selector {
+    max-height: 200px;
+    overflow-y: auto;
+    border: 1px solid var(--wechat-border);
+    border-radius: 8px;
+    padding: 4px;
+}
+
+/* ===== @Mention Highlight ===== */
+.mention-highlight {
+    color: #07c160;
+    font-weight: 500;
+    background: rgba(7,193,96,0.1);
+    padding: 1px 4px;
+    border-radius: 3px;
+}
+
+/* ===== Typing Indicator ===== */
+.typing-indicator {
+    font-size: 12px;
+    color: var(--wechat-text-light);
+    padding: 4px 16px;
+    font-style: italic;
+    animation: typingPulse 1.5s ease infinite;
+}
+@keyframes typingPulse {
+    0%,100% { opacity: 0.6; }
+    50% { opacity: 1; }
+}
+
+/* ===== Read Receipt (Double Check) ===== */
+.msg-status {
+    font-size: 11px;
+    margin-top: 2px;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    justify-content: flex-end;
+}
+.msg-status .status-icon {
+    font-size: 12px;
+}
+.msg-status .status-delivered {
+    color: var(--wechat-text-light);
+}
+.msg-status .status-read {
+    color: #07c160;
+}
+
+/* ===== Image Message ===== */
+.msg-image {
+    max-width: 240px;
+    max-height: 300px;
+    border-radius: 8px;
+    cursor: pointer;
+    display: block;
+    transition: transform 0.2s;
+}
+.msg-image:hover {
+    transform: scale(1.02);
+}
+.image-preview-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0,0,0,0.9);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 9000;
+    cursor: pointer;
+}
+.image-preview-modal.active {
+    display: flex;
+}
+.image-preview-modal img {
+    max-width: 90vw;
+    max-height: 90vh;
+    object-fit: contain;
+}
+
+/* ===== Message Multi-Select Mode ===== */
+.message.selectable {
+    cursor: pointer;
+}
+.message.selected {
+    background: rgba(7,193,96,0.08);
+    border-radius: 8px;
+}
+.message .checkbox {
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--wechat-text-light);
+    border-radius: 4px;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+.message.selectable .checkbox {
+    display: flex;
+}
+.message.selected .checkbox {
+    background: #07c160;
+    border-color: #07c160;
+    color: white;
+}
+.multi-select-bar {
+    position: sticky;
+    bottom: 0;
+    background: white;
+    padding: 8px 16px;
+    border-top: 1px solid var(--wechat-border);
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+}
+.multi-select-bar button {
+    padding: 8px 16px;
+    background: var(--wechat-green);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.2s;
+}
+.multi-select-bar button:hover {
+    background: var(--wechat-green-dark);
+}
+
+/* ===== Forward Selector ===== */
+.forward-modal .friend-item {
+    cursor: pointer;
+}
+.forward-modal .friend-item:hover {
+    background: rgba(7,193,96,0.08);
+}
+
+/* ===== Todo List ===== */
+.todo-section {
+    padding: 16px;
+}
+.todo-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+.todo-header h3 {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--wechat-text-primary);
+}
+.todo-input-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+.todo-input-row input {
+    flex: 1;
+    padding: 10px 14px;
+    border: 1px solid var(--wechat-border);
+    border-radius: 8px;
+    font-size: 14px;
+}
+.todo-input-row input:focus {
+    outline: none;
+    border-color: var(--wechat-green);
+}
+.todo-input-row button {
+    padding: 10px 16px;
+    background: var(--wechat-green);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+}
+.todo-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--wechat-border);
+}
+.todo-item .todo-checkbox {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 2px solid var(--wechat-text-light);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: all 0.2s;
+}
+.todo-item .todo-checkbox.done {
+    background: var(--wechat-green);
+    border-color: var(--wechat-green);
+    color: white;
+}
+.todo-item .todo-text {
+    flex: 1;
+    font-size: 14px;
+}
+.todo-item .todo-text.done {
+    text-decoration: line-through;
+    color: var(--wechat-text-light);
+}
+.todo-item .todo-delete {
+    background: none;
+    border: none;
+    color: var(--wechat-text-light);
+    cursor: pointer;
+    font-size: 16px;
+    padding: 4px;
+}
+.todo-item .todo-delete:hover {
+    color: #f44336;
+}
+
+/* ===== Senior Mode (Large Font) ===== */
+:root.senior-mode {
+    font-size: 18px;
+}
+:root.senior-mode .msg-content {
+    font-size: 20px;
+    padding: 14px 18px;
+}
+:root.senior-mode .message-input input {
+    font-size: 18px;
+    padding: 14px 18px;
+}
+:root.senior-mode .tab {
+    font-size: 16px;
+    padding: 14px 10px;
+}
+:root.senior-mode .friend-item .friend-name {
+    font-size: 18px;
+}
+:root.senior-mode .chat-header h3 {
+    font-size: 20px;
+}
+:root.senior-mode .user-name {
+    font-size: 18px;
+}
+:root.senior-mode button {
+    font-size: 16px !important;
+}
+:root.senior-mode input {
+    font-size: 16px !important;
+}
+.senior-toggle {
+    font-size: 16px;
+    cursor: pointer;
+    background: none;
+    border: none;
+    padding: 4px 8px;
+}
+
+/* ===== Location Card ===== */
+.location-card {
+    background: #fff;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    cursor: pointer;
+    width: 200px;
+}
+.location-card .location-map {
+    width: 100%;
+    height: 120px;
+    background: #f0f0f0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 32px;
+}
+.location-card .location-info {
+    padding: 8px 12px;
+}
+.location-card .location-name {
+    font-size: 13px;
+    font-weight: 500;
+}
+.location-card .location-addr {
+    font-size: 11px;
+    color: var(--wechat-text-light);
+}
+
+/* ===== WebView Offline Banner ===== */
+.offline-banner {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    background: #f44336;
+    color: white;
+    text-align: center;
+    padding: 6px;
+    font-size: 13px;
+    z-index: 9999;
+    display: none;
+}
+.offline-banner.active {
+    display: block;
+}
+
+/* ===== Stats Badge ===== */
+.stats-badge {
+    position: fixed;
+    bottom: 8px;
+    right: 8px;
+    font-size: 10px;
+    color: rgba(0,0,0,0.2);
+    z-index: 0;
+    pointer-events: none;
+}
+
+/* ===== Export Button ===== */
+.export-btn {
+    padding: 8px 12px;
+    background: rgba(247,247,247,0.9);
+    border: 1px solid var(--wechat-border);
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--wechat-text-secondary);
+    transition: all 0.2s;
+}
+.export-btn:hover {
+    background: rgba(7,193,96,0.08);
+    color: var(--wechat-green);
+}

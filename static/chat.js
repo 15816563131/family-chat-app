@@ -10,6 +10,21 @@ let currentTab = 'friends';
 const displayedMessageIds = new Set();
 const unreadMessages = {};
 
+// ===== 群组状态变量 =====
+let currentGroupId = null;
+let groupsList = [];
+let currentGroupMembers = [];
+
+// ===== 多选 & 转发 =====
+let selectedMessages = [];
+let isMultiSelectMode = false;
+
+// ===== 老年模式 =====
+let isSeniorMode = localStorage.getItem('seniorMode') === 'true';
+
+// ===== 待办清单 =====
+let todoSectionVisible = true;
+
 // ===== 语音输入 (Speech-to-Text) =====
 let speechRecognition = null;
 let isSpeechRecording = false;
@@ -1226,6 +1241,7 @@ function addMessageToUI(message) {
     messageElement.className = 'message ' + (message.is_mine ? 'sent' : 'received');
     if (message.id) {
         messageElement.dataset.messageId = message.id;
+        messageElement.dataset.msgId = message.id;
     }
     if (message.is_temporary) {
         messageElement.dataset.temporary = 'true';
@@ -1304,6 +1320,15 @@ function addMessageToUI(message) {
             if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
         });
     }
+    
+    // 多选模式选择支持
+    messageElement.onclick = function(e) {
+        if (typeof isMultiSelectMode !== 'undefined' && isMultiSelectMode) {
+            e.preventDefault();
+            e.stopPropagation();
+            toggleMessageSelect(this);
+        }
+    };
     
     messagesContainer.appendChild(messageElement);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
@@ -1624,6 +1649,7 @@ function handleKeyPress(event) {
     if (event.key === 'Enter') {
         sendMessage();
     }
+    handleFriendTyping();
 }
 
 function updateUserAvatar(avatarUrl) {
@@ -2303,6 +2329,42 @@ function initChat() {
         showSyncStatus('连接错误，请检查网络', true);
     });
     
+    // ===== 输入状态提示 =====
+    socket.on('user_typing', function(data) {
+        if (data.user_id !== currentUser.id && currentGroupId === null && data.room === String(currentFriendId)) {
+            var el = document.getElementById('friend-typing');
+            if (!el) {
+                var header = document.querySelector('#chat-window .chat-header-info');
+                if (header) {
+                    var typingDiv = document.createElement('div');
+                    typingDiv.id = 'friend-typing';
+                    typingDiv.className = 'typing-indicator';
+                    typingDiv.textContent = '对方正在输入...';
+                    header.appendChild(typingDiv);
+                }
+            } else {
+                el.style.display = 'block';
+            }
+        }
+        // Group typing
+        if (data.room === 'group_' + currentGroupId && data.user_id !== currentUser.id) {
+            var el = document.getElementById('group-typing');
+            if (el) {
+                el.textContent = data.username + ' 正在输入...';
+                el.style.display = 'block';
+                clearTimeout(el._typingTimer);
+                el._typingTimer = setTimeout(function() { el.style.display = 'none'; }, 3000);
+            }
+        }
+    });
+    
+    socket.on('user_stop_typing', function(data) {
+        if (data.room === 'group_' + currentGroupId) {
+            var el = document.getElementById('group-typing');
+            if (el) el.style.display = 'none';
+        }
+    });
+    
     initWebRTCSocketHandlers();
     initVoiceButton();
 
@@ -2310,6 +2372,15 @@ function initChat() {
     
     loadFriends();
     loadFriendRequests();
+    
+    // 加载新功能
+    loadStats();
+    setupMessageLongPress();
+    addImageButtons();
+    addLocationButton();
+    if (isSeniorMode) {
+        document.documentElement.classList.add('senior-mode');
+    }
     
     setInterval(() => {
         loadFriendRequests();
@@ -2323,6 +2394,877 @@ function initChat() {
             showSyncStatus('正在尝试建立连接...', true);
         }
     }, 5000);
+}
+
+// ===================================================================
+// ===== 以下为新增功能函数 =====
+// ===================================================================
+
+// ===== 1. 群组功能 =====
+
+// 载入群列表
+function loadGroups() {
+    fetch('/api/groups/' + currentUser.id)
+        .then(r => r.json())
+        .then(groups => {
+            groupsList = groups;
+            var el = document.getElementById('groups-list');
+            if (!el) return;
+            el.innerHTML = '';
+            groups.forEach(function(g) {
+                var div = document.createElement('div');
+                div.className = 'friend-item' + (currentGroupId === g.id ? ' active' : '');
+                div.onclick = function() { openGroupChat(g.id); };
+                div.innerHTML = '<div style="display:flex;align-items:center;gap:10px;">' +
+                    '<div class="group-avatar">' +
+                    '<span>' + (g.name ? g.name.charAt(0).toUpperCase() : 'G') + '</span></div>' +
+                    '<div style="flex:1"><div class="friend-name">' + escapeHtml(g.name) + '</div>' +
+                    '<div class="last-message">' + (g.member_count || 0) + ' 位成员</div></div></div>';
+                el.appendChild(div);
+            });
+        });
+}
+
+function showCreateGroupModal() {
+    document.getElementById('create-group-modal').style.display = 'flex';
+}
+function closeCreateGroupModal() {
+    document.getElementById('create-group-modal').style.display = 'none';
+}
+
+function createGroup() {
+    var name = document.getElementById('create-group-name').value.trim();
+    var desc = document.getElementById('create-group-desc').value.trim();
+    if (!name) { alert('请输入群名称'); return; }
+    showLoading();
+    fetch('/api/groups/create', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name: name, description: desc, created_by: currentUser.id})
+    }).then(r => r.json()).then(data => {
+        hideLoading();
+        if (data.error) { alert(data.error); return; }
+        closeCreateGroupModal();
+        document.getElementById('create-group-name').value = '';
+        document.getElementById('create-group-desc').value = '';
+        loadGroups();
+        switchTab('groups');
+    }).catch(function() { hideLoading(); alert('创建失败'); });
+}
+
+function openGroupChat(groupId) {
+    currentGroupId = groupId;
+    currentFriendId = null;
+    document.getElementById('no-chat-selected').style.display = 'none';
+    document.getElementById('chat-window').style.display = 'none';
+    document.getElementById('group-chat-window').style.display = 'flex';
+
+    var group = groupsList.find(function(g) { return g.id === groupId; });
+    if (group) {
+        document.getElementById('group-chat-name').textContent = group.name;
+        document.getElementById('group-chat-avatar-initial').textContent = group.name.charAt(0).toUpperCase();
+    }
+
+    document.querySelectorAll('#groups-list .friend-item').forEach(function(el) { el.classList.remove('active'); });
+    loadGroupMessages();
+    loadGroupMembers();
+    loadTodoList();
+
+    if (socket && socket.connected) {
+        socket.emit('join_group', {group_id: groupId, user_id: currentUser.id});
+    }
+
+    closeChat();
+}
+
+function closeGroupChat() {
+    currentGroupId = null;
+    document.getElementById('group-chat-window').style.display = 'none';
+    document.getElementById('no-chat-selected').style.display = 'flex';
+}
+
+function loadGroupMessages() {
+    if (!currentGroupId) return;
+    var container = document.getElementById('group-messages-container');
+    container.innerHTML = '<div style="text-align:center;padding:20px;color:var(--wechat-text-light);">加载中...</div>';
+
+    fetch('/api/group_messages/' + currentGroupId)
+        .then(r => r.json())
+        .then(messages => {
+            container.innerHTML = '';
+            messages.forEach(function(msg) {
+                appendGroupMessage(msg);
+            });
+            container.scrollTop = container.scrollHeight;
+        })
+        .catch(function() {
+            container.innerHTML = '<div style="text-align:center;padding:20px;color:var(--wechat-text-light);">加载失败</div>';
+        });
+}
+
+function appendGroupMessage(msg) {
+    var container = document.getElementById('group-messages-container');
+    if (!container) return;
+
+    if (msg.recalled) {
+        var recallDiv = document.createElement('div');
+        recallDiv.className = 'recall-notice';
+        recallDiv.textContent = msg.sender_name + ' 撤回了一条消息';
+        container.appendChild(recallDiv);
+        return;
+    }
+
+    var div = document.createElement('div');
+    div.className = 'message ' + (msg.sender_id === currentUser.id ? 'sent' : 'received');
+
+    var senderName = document.createElement('div');
+    senderName.style.cssText = 'font-size:11px;color:var(--wechat-text-light);margin-bottom:2px;';
+    senderName.textContent = msg.sender_name;
+
+    var contentDiv = document.createElement('div');
+    contentDiv.className = 'msg-bubble';
+
+    if (msg.sender_id !== currentUser.id) {
+        contentDiv.appendChild(senderName);
+    }
+
+    var bubble = document.createElement('div');
+    bubble.className = 'msg-content';
+
+    if (msg.msg_type === 'text') {
+        var html = escapeHtml(msg.content);
+        html = html.replace(/@(\d+)/g, '<span class="mention-highlight">@$1</span>');
+        bubble.innerHTML = html;
+    } else if (msg.msg_type === 'image') {
+        var img = document.createElement('img');
+        img.className = 'msg-image';
+        img.src = msg.content;
+        img.onclick = function(e) {
+            e.stopPropagation();
+            previewImage(msg.content);
+        };
+        bubble.appendChild(img);
+    } else if (msg.msg_type === 'voice') {
+        bubble.innerHTML = '<div class="voice-msg-content" onclick="playVoice(this,\'' + escapeHtml(msg.voice_url || '') + '\')">' +
+            '<span class="voice-play-icon">▶</span><div class="voice-wave"><span></span><span></span><span></span><span></span><span></span></div>' +
+            '<span class="voice-duration">' + Math.round(msg.voice_duration || 0) + '"</span></div>';
+    } else {
+        bubble.textContent = msg.content;
+    }
+
+    contentDiv.appendChild(bubble);
+
+    var timeDiv = document.createElement('div');
+    timeDiv.className = 'msg-time';
+    timeDiv.textContent = formatTime(msg.timestamp);
+    contentDiv.appendChild(timeDiv);
+
+    div.appendChild(contentDiv);
+    container.appendChild(div);
+
+    container.scrollTop = container.scrollHeight;
+}
+
+function sendGroupMessage() {
+    var input = document.getElementById('group-message-input');
+    var content = input.value.trim();
+    if (!content || !currentGroupId || !socket) return;
+
+    socket.emit('send_group_message', {
+        group_id: currentGroupId,
+        sender_id: currentUser.id,
+        content: content,
+        msg_type: 'text'
+    });
+    input.value = '';
+}
+
+function handleGroupKeyPress(e) {
+    if (e.key === 'Enter') sendGroupMessage();
+}
+
+var groupTypingTimer = null;
+function handleGroupTyping() {
+    if (!socket || !currentGroupId) return;
+    socket.emit('typing', {room: 'group_' + currentGroupId, user_id: currentUser.id, username: currentUser.username});
+    if (groupTypingTimer) clearTimeout(groupTypingTimer);
+    groupTypingTimer = setTimeout(function() {
+        if (socket) socket.emit('stop_typing', {room: 'group_' + currentGroupId, user_id: currentUser.id, username: currentUser.username});
+    }, 2000);
+}
+
+function openGroupProfile() {
+    if (!currentGroupId) return;
+    var group = groupsList.find(function(g) { return g.id === currentGroupId; });
+    if (!group) return;
+    document.getElementById('group-profile-name').value = group.name || '';
+    document.getElementById('group-profile-desc').value = group.description || '';
+
+    document.getElementById('announcement-text').textContent = group.announcement || '暂无公告';
+    document.getElementById('announcement-text').style.display = 'block';
+    document.getElementById('announcement-edit').style.display = 'none';
+    document.getElementById('save-announcement-btn').style.display = 'none';
+
+    loadGroupMembers();
+    document.getElementById('group-profile-modal').style.display = 'flex';
+}
+
+function closeGroupProfile() {
+    document.getElementById('group-profile-modal').style.display = 'none';
+}
+
+function loadGroupMembers() {
+    if (!currentGroupId) return;
+    fetch('/api/groups/' + currentGroupId + '/members')
+        .then(r => r.json())
+        .then(members => {
+            currentGroupMembers = members;
+            var el = document.getElementById('group-members-list');
+            if (!el) return;
+            el.innerHTML = '';
+            var currentMember = members.find(function(m) { return m.user_id === currentUser.id; });
+            var isAdmin = currentMember && (currentMember.role === 'owner' || currentMember.role === 'admin');
+
+            members.forEach(function(m) {
+                var div = document.createElement('div');
+                div.className = 'group-member-item';
+                div.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--wechat-border);';
+
+                var avatar = document.createElement('div');
+                avatar.style.cssText = 'width:36px;height:36px;border-radius:50%;background:#07c160;color:white;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:600;';
+                avatar.textContent = m.username ? m.username.charAt(0).toUpperCase() : '?';
+
+                var info = document.createElement('div');
+                info.style.cssText = 'flex:1;';
+                info.innerHTML = '<div style="font-size:14px;">' + escapeHtml(m.username) +
+                    ' <span class="role-badge" style="font-size:11px;padding:2px 6px;border-radius:4px;' +
+                    (m.role === 'owner' ? 'color:#d4a017;background:rgba(212,160,23,0.1);' :
+                     m.role === 'admin' ? 'color:#07c160;background:rgba(7,193,96,0.1);' :
+                     'color:var(--wechat-text-light);background:rgba(0,0,0,0.05);') + '">' +
+                    (m.role === 'owner' ? '群主' : m.role === 'admin' ? '管理员' : '成员') + '</span></div>';
+
+                div.appendChild(avatar);
+                div.appendChild(info);
+
+                if (isAdmin && m.user_id !== currentUser.id && currentMember.role === 'owner' ||
+                    (isAdmin && m.user_id !== currentUser.id && m.role !== 'owner')) {
+                    var removeBtn = document.createElement('button');
+                    removeBtn.className = 'remove-member-btn';
+                    removeBtn.style.cssText = 'padding:4px 8px;background:rgba(244,67,54,0.1);color:#f44336;border:none;border-radius:4px;cursor:pointer;font-size:12px;';
+                    removeBtn.textContent = '移除';
+                    removeBtn.onclick = function() { removeGroupMember(m.user_id); };
+                    div.appendChild(removeBtn);
+
+                    if (m.role === 'member' && currentMember.role === 'owner') {
+                        var setAdminBtn = document.createElement('button');
+                        setAdminBtn.style.cssText = 'padding:4px 8px;background:rgba(7,193,96,0.1);color:#07c160;border:none;border-radius:4px;cursor:pointer;font-size:12px;margin-left:4px;';
+                        setAdminBtn.textContent = '设为管理';
+                        setAdminBtn.onclick = function() { setGroupMemberRole(m.user_id, 'admin'); };
+                        div.appendChild(setAdminBtn);
+                    }
+                }
+
+                el.appendChild(div);
+            });
+        });
+}
+
+function removeGroupMember(userId) {
+    if (!confirm('确定移除该成员？')) return;
+    fetch('/api/groups/' + currentGroupId + '/remove_member', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({user_id: userId, admin_id: currentUser.id})
+    }).then(r => r.json()).then(function(data) {
+        if (data.error) { alert(data.error); return; }
+        loadGroupMembers();
+    });
+}
+
+function setGroupMemberRole(userId, role) {
+    fetch('/api/groups/' + currentGroupId + '/set_role', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({user_id: userId, role: role, admin_id: currentUser.id})
+    }).then(r => r.json()).then(function(data) {
+        if (data.error) { alert(data.error); return; }
+        loadGroupMembers();
+    });
+}
+
+function editAnnouncement() {
+    var textEl = document.getElementById('announcement-text');
+    var editEl = document.getElementById('announcement-edit');
+    var saveBtn = document.getElementById('save-announcement-btn');
+    textEl.style.display = 'none';
+    editEl.value = textEl.textContent === '暂无公告' ? '' : textEl.textContent;
+    editEl.style.display = 'block';
+    saveBtn.style.display = 'inline-block';
+}
+
+function saveAnnouncement() {
+    var content = document.getElementById('announcement-edit').value.trim();
+    if (!content) { alert('公告不能为空'); return; }
+    fetch('/api/groups/' + currentGroupId + '/announcement', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({content: content, user_id: currentUser.id})
+    }).then(r => r.json()).then(function(data) {
+        if (data.error) { alert(data.error); return; }
+        document.getElementById('announcement-text').textContent = content;
+        document.getElementById('announcement-text').style.display = 'block';
+        document.getElementById('announcement-edit').style.display = 'none';
+        document.getElementById('save-announcement-btn').style.display = 'none';
+        var g = groupsList.find(function(x) { return x.id === currentGroupId; });
+        if (g) g.announcement = content;
+    });
+}
+
+function leaveGroup() {
+    if (!confirm('确定退出该群聊？')) return;
+    fetch('/api/groups/' + currentGroupId + '/leave', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({user_id: currentUser.id})
+    }).then(r => r.json()).then(function(data) {
+        if (data.error) { alert(data.error); return; }
+        closeGroupProfile();
+        closeGroupChat();
+        loadGroups();
+    });
+}
+
+// ===== 2. 图片发送 =====
+
+function sendImage() {
+    var input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = function(e) {
+        var file = e.target.files[0];
+        if (!file) return;
+        if (file.size > 10 * 1024 * 1024) { alert('图片不能超过 10MB'); return; }
+
+        if (currentGroupId) {
+            var formData = new FormData();
+            formData.append('image', file);
+            formData.append('sender_id', currentUser.id);
+            formData.append('group_id', currentGroupId);
+
+            fetch('/api/upload_image', {
+                method: 'POST',
+                body: formData
+            }).then(r => r.json()).then(function(data) {
+                if (data.url && socket) {
+                    socket.emit('send_group_message', {
+                        group_id: currentGroupId,
+                        sender_id: currentUser.id,
+                        content: data.url,
+                        msg_type: 'image'
+                    });
+                }
+            });
+        } else if (currentFriendId) {
+            var formData = new FormData();
+            formData.append('image', file);
+            formData.append('sender_id', currentUser.id);
+
+            fetch('/api/upload_image', {
+                method: 'POST',
+                body: formData
+            }).then(r => r.json()).then(function(data) {
+                if (data.url && socket) {
+                    socket.emit('send_message', {
+                        sender_id: currentUser.id,
+                        receiver_id: currentFriendId,
+                        content: data.url,
+                        msg_type: 'image'
+                    });
+                }
+            });
+        }
+    };
+    input.click();
+}
+
+function previewImage(url) {
+    var modal = document.getElementById('image-preview-modal');
+    var img = document.getElementById('preview-image');
+    if (modal && img) {
+        img.src = url;
+        modal.style.display = 'flex';
+    }
+}
+function closeImagePreview() {
+    var modal = document.getElementById('image-preview-modal');
+    if (modal) modal.style.display = 'none';
+}
+
+// ===== 3. 图片按钮添加到输入框 =====
+
+function addImageButtons() {
+    var inputArea = document.querySelector('#chat-window .message-input');
+    if (inputArea) {
+        var imgBtn = document.createElement('button');
+        imgBtn.className = 'voice-input-btn';
+        imgBtn.textContent = '🖼️';
+        imgBtn.title = '发送图片';
+        imgBtn.onclick = sendImage;
+        imgBtn.style.fontSize = '16px';
+        inputArea.insertBefore(imgBtn, inputArea.firstChild);
+    }
+    var groupInputArea = document.querySelector('#group-chat-window .message-input');
+    if (groupInputArea) {
+        var gImgBtn = document.createElement('button');
+        gImgBtn.className = 'voice-input-btn';
+        gImgBtn.textContent = '🖼️';
+        gImgBtn.title = '发送图片';
+        gImgBtn.onclick = sendImage;
+        gImgBtn.style.fontSize = '16px';
+        groupInputArea.insertBefore(gImgBtn, groupInputArea.firstChild);
+    }
+}
+
+// ===== 4. 多选 & 转发 =====
+
+function setupMessageLongPress() {
+    document.addEventListener('touchstart', function(e) {
+        var msgEl = e.target.closest('.message');
+        if (!msgEl) return;
+        var timer = setTimeout(function() {
+            enterMultiSelectMode(msgEl);
+        }, 600);
+        msgEl._longPressTimer = timer;
+    }, {passive: true});
+
+    document.addEventListener('touchend', function(e) {
+        var msgEl = e.target.closest('.message');
+        if (msgEl && msgEl._longPressTimer) {
+            clearTimeout(msgEl._longPressTimer);
+            delete msgEl._longPressTimer;
+        }
+    }, {passive: true});
+}
+
+function enterMultiSelectMode(el) {
+    isMultiSelectMode = true;
+    selectedMessages = [];
+    document.querySelectorAll('.message').forEach(function(m) {
+        m.classList.add('selectable');
+        var cb = document.createElement('div');
+        cb.className = 'checkbox';
+        cb.textContent = '✓';
+        m.insertBefore(cb, m.firstChild);
+    });
+    document.getElementById('multi-select-bar').style.display = 'flex';
+    toggleMessageSelect(el);
+}
+
+function toggleMessageSelect(el) {
+    if (!isMultiSelectMode) return;
+    el.classList.toggle('selected');
+    var msgId = el.dataset.msgId;
+    if (!msgId) return;
+    var idx = selectedMessages.indexOf(msgId);
+    if (idx >= 0) {
+        selectedMessages.splice(idx, 1);
+    } else {
+        selectedMessages.push(msgId);
+    }
+    document.getElementById('selected-count').textContent = '已选择 ' + selectedMessages.length + ' 条';
+}
+
+function cancelMultiSelect() {
+    isMultiSelectMode = false;
+    selectedMessages = [];
+    document.querySelectorAll('.message').forEach(function(m) {
+        m.classList.remove('selectable', 'selected');
+        var cb = m.querySelector('.checkbox');
+        if (cb) cb.remove();
+    });
+    document.getElementById('multi-select-bar').style.display = 'none';
+}
+
+function deleteSelected() {
+    if (selectedMessages.length === 0) return;
+    if (!confirm('确定删除选中的 ' + selectedMessages.length + ' 条消息？（仅本地删除）')) return;
+    selectedMessages.forEach(function(id) {
+        var el = document.querySelector('.message[data-msg-id="' + id + '"]');
+        if (el) el.remove();
+    });
+    cancelMultiSelect();
+}
+
+function forwardSelected() {
+    if (selectedMessages.length === 0) return;
+    var modal = document.getElementById('forward-modal');
+    var friendsListEl = document.getElementById('forward-friends-list');
+    var groupsListEl = document.getElementById('forward-groups-list');
+
+    friendsListEl.innerHTML = '<h4 style="font-size:13px;color:var(--wechat-text-secondary);margin:8px 0;">好友</h4>';
+    groupsListEl.innerHTML = '<h4 style="font-size:13px;color:var(--wechat-text-secondary);margin:8px 0;">群聊</h4>';
+
+    // 从服务器加载好友列表
+    fetch('/api/friends/' + currentUser.id)
+        .then(function(r) { return r.json(); })
+        .then(function(friends) {
+            friends.forEach(function(f) {
+                var div = document.createElement('div');
+                div.className = 'friend-item';
+                div.style.cssText = 'padding:10px 12px;display:flex;align-items:center;gap:10px;';
+                div.innerHTML = '<div style="width:36px;height:36px;border-radius:50%;background:#07c160;color:white;display:flex;align-items:center;justify-content:center;font-size:14px;">' +
+                    f.username.charAt(0).toUpperCase() + '</div><span>' + escapeHtml(f.username) + '</span>';
+                div.onclick = function() { doForward('friend', f.id, f.username); };
+                friendsListEl.appendChild(div);
+            });
+        })
+        .catch(function() {
+            friendsListEl.innerHTML += '<p style="color:var(--wechat-text-light);padding:10px;text-align:center;">加载好友失败</p>';
+        });
+
+    // 使用已有的群组数据
+    groupsList.forEach(function(g) {
+        var div = document.createElement('div');
+        div.className = 'friend-item';
+        div.style.cssText = 'padding:10px 12px;display:flex;align-items:center;gap:10px;';
+        div.innerHTML = '<div style="width:36px;height:36px;border-radius:50%;background:#07c160;color:white;display:flex;align-items:center;justify-content:center;font-size:14px;">' +
+            g.name.charAt(0).toUpperCase() + '</div><span>' + escapeHtml(g.name) + '</span>';
+        div.onclick = function() { doForward('group', g.id, g.name); };
+        groupsListEl.appendChild(div);
+    });
+
+    modal.style.display = 'flex';
+}
+
+function closeForwardModal() {
+    document.getElementById('forward-modal').style.display = 'none';
+}
+
+function doForward(type, targetId, targetName) {
+    if (!confirm('转发 ' + selectedMessages.length + ' 条消息给 ' + targetName + '？')) return;
+    var contents = [];
+    selectedMessages.forEach(function(id) {
+        var el = document.querySelector('.message[data-msg-id="' + id + '"]');
+        if (el) {
+            var bubble = el.querySelector('.msg-content');
+            if (bubble) contents.push(bubble.textContent || bubble.innerText);
+        }
+    });
+
+    if (contents.length === 0) { closeForwardModal(); cancelMultiSelect(); return; }
+
+    var text = '📨 转发消息:\n' + contents.join('\n---\n');
+
+    if (type === 'friend') {
+        if (socket) {
+            socket.emit('send_message', {
+                sender_id: currentUser.id,
+                receiver_id: targetId,
+                content: text,
+                msg_type: 'text'
+            });
+        }
+    } else if (type === 'group') {
+        if (socket) {
+            socket.emit('send_group_message', {
+                group_id: targetId,
+                sender_id: currentUser.id,
+                content: text,
+                msg_type: 'text'
+            });
+        }
+    }
+
+    closeForwardModal();
+    cancelMultiSelect();
+    alert('已转发 ' + contents.length + ' 条消息');
+}
+
+// ===== 5. 输入状态提示 =====
+
+var friendTypingTimer = null;
+function handleFriendTyping() {
+    if (!socket || !currentFriendId) return;
+    socket.emit('typing', {room: String(currentFriendId), user_id: currentUser.id, username: currentUser.username});
+    if (friendTypingTimer) clearTimeout(friendTypingTimer);
+    friendTypingTimer = setTimeout(function() {
+        if (socket) socket.emit('stop_typing', {room: String(currentFriendId), user_id: currentUser.id, username: currentUser.username});
+    }, 2000);
+}
+
+// ===== 6. 老年模式 =====
+
+function toggleSeniorMode() {
+    isSeniorMode = !isSeniorMode;
+    localStorage.setItem('seniorMode', isSeniorMode);
+    document.documentElement.classList.toggle('senior-mode', isSeniorMode);
+}
+
+// ===== 7. 聊天导出 =====
+
+function exportChat() {
+    if (!currentUser) return;
+    showLoading();
+    fetch('/api/export/chat/' + currentUser.id)
+        .then(r => r.json())
+        .then(function(data) {
+            hideLoading();
+            var blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            a.href = url;
+            a.download = 'family-chat-export-' + currentUser.username + '-' + new Date().toISOString().slice(0,10) + '.json';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        })
+        .catch(function() { hideLoading(); alert('导出失败'); });
+}
+
+// ===== 8. 访问统计 =====
+
+function loadStats() {
+    fetch('/api/stats')
+        .then(r => r.json())
+        .then(function(data) {
+            var el = document.getElementById('stats-badge');
+            if (el) {
+                el.textContent = '访问 ' + (data.visits || 0) + ' · 防护 ' + (data.attacks || 0);
+            }
+        })
+        .catch(function() {});
+}
+
+// ===== 9. 离线检测 =====
+
+window.addEventListener('online', function() {
+    document.getElementById('offline-banner').classList.remove('active');
+});
+window.addEventListener('offline', function() {
+    document.getElementById('offline-banner').classList.add('active');
+});
+
+// ===== 10. 购物清单 / 待办事项 (群组功能) =====
+
+function toggleTodoSection() {
+    todoSectionVisible = !todoSectionVisible;
+    var list = document.getElementById('todo-list');
+    if (list) list.style.display = todoSectionVisible ? 'block' : 'none';
+    var btn = document.querySelector('#todo-section .action-btn');
+    if (btn) btn.textContent = todoSectionVisible ? '收起 ▲' : '展开 ▼';
+}
+
+function loadTodoList() {
+    if (!currentGroupId) return;
+    fetch('/api/todo/' + currentGroupId)
+        .then(r => r.json())
+        .then(function(lists) {
+            renderTodoList(lists);
+        })
+        .catch(function() {});
+}
+
+function renderTodoList(lists) {
+    var el = document.getElementById('todo-list');
+    if (!el) return;
+
+    if (!lists || lists.length === 0) {
+        fetch('/api/todo/create', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({group_id: currentGroupId, title: '共享清单', user_id: currentUser.id})
+        }).then(r => r.json()).then(function(data) {
+            if (data.id) loadTodoList();
+        });
+        el.innerHTML = '<p style="color:var(--wechat-text-light);font-size:13px;text-align:center;padding:12px;">正在创建清单...</p>';
+        return;
+    }
+
+    el.innerHTML = '';
+    lists.forEach(function(list) {
+        var items = list.items || [];
+        var section = document.createElement('div');
+        section.innerHTML = '<div style="font-size:13px;font-weight:500;color:var(--wechat-text-secondary);margin:8px 0;">' +
+            escapeHtml(list.title) + '</div>';
+
+        items.forEach(function(item) {
+            var itemDiv = document.createElement('div');
+            itemDiv.className = 'todo-item';
+
+            var cb = document.createElement('div');
+            cb.className = 'todo-checkbox' + (item.done ? ' done' : '');
+            cb.textContent = item.done ? '✓' : '';
+            cb.onclick = function() { toggleTodoItem(item.id); };
+
+            var text = document.createElement('span');
+            text.className = 'todo-text' + (item.done ? ' done' : '');
+            text.textContent = item.content;
+
+            var del = document.createElement('button');
+            del.className = 'todo-delete';
+            del.textContent = '×';
+            del.onclick = function() { deleteTodoItem(item.id); };
+
+            itemDiv.appendChild(cb);
+            itemDiv.appendChild(text);
+            itemDiv.appendChild(del);
+            section.appendChild(itemDiv);
+        });
+
+        el.appendChild(section);
+    });
+}
+
+function addTodoItem() {
+    var input = document.getElementById('todo-input');
+    var content = input.value.trim();
+    if (!content || !currentGroupId) return;
+
+    fetch('/api/todo/item/add', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({todo_list_id: currentGroupId, content: content, user_id: currentUser.id})
+    }).then(r => r.json()).then(function(data) {
+        if (!data.error) {
+            input.value = '';
+            loadTodoList();
+        }
+    });
+}
+
+function toggleTodoItem(itemId) {
+    fetch('/api/todo/item/toggle', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({item_id: itemId, user_id: currentUser.id})
+    }).then(function() { loadTodoList(); });
+}
+
+function deleteTodoItem(itemId) {
+    fetch('/api/todo/item/delete', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({item_id: itemId})
+    }).then(function() { loadTodoList(); });
+}
+
+// ===== 11. 工具函数 =====
+
+function formatTime(ts) {
+    if (!ts) return '';
+    var d = new Date(ts);
+    if (isNaN(d.getTime())) {
+        d = new Date(ts);
+    }
+    if (isNaN(d.getTime())) return '';
+    var h = d.getHours().toString().padStart(2, '0');
+    var m = d.getMinutes().toString().padStart(2, '0');
+    return h + ':' + m;
+}
+
+// ===== 12. 位置分享 =====
+
+function sendLocation() {
+    if (!navigator.geolocation) {
+        alert('当前设备不支持定位功能');
+        return;
+    }
+    showLoading();
+    navigator.geolocation.getCurrentPosition(function(pos) {
+        hideLoading();
+        var lat = pos.coords.latitude;
+        var lng = pos.coords.longitude;
+        var mapUrl = 'https://map.baidu.com?lat=' + lat + '&lng=' + lng;
+        var content = '📍 [位置] 查看地图: ' + mapUrl;
+
+        if (currentGroupId && socket) {
+            socket.emit('send_group_message', {
+                group_id: currentGroupId,
+                sender_id: currentUser.id,
+                content: content,
+                msg_type: 'text'
+            });
+        } else if (currentFriendId && socket) {
+            socket.emit('send_message', {
+                sender_id: currentUser.id,
+                receiver_id: currentFriendId,
+                content: content,
+                msg_type: 'text'
+            });
+        }
+    }, function(err) {
+        hideLoading();
+        alert('获取位置失败: ' + err.message);
+    }, {enableHighAccuracy: false, timeout: 10000});
+}
+
+function addLocationButton() {
+    var inputAreas = document.querySelectorAll('.message-input');
+    inputAreas.forEach(function(area) {
+        var locBtn = document.createElement('button');
+        locBtn.className = 'voice-input-btn';
+        locBtn.textContent = '📍';
+        locBtn.title = '发送位置';
+        locBtn.onclick = sendLocation;
+        locBtn.style.fontSize = '16px';
+        area.insertBefore(locBtn, area.querySelector('.voice-input-btn'));
+    });
+}
+
+// ===== 13. Android 原生图片选择回调 =====
+// 当用户在 Android 原生端通过相册或相机选择图片后，此函数被调用
+function handleAndroidImage(dataUrl) {
+    console.log('handleAndroidImage called, length:', dataUrl.length);
+    // 将 base64 图片上传到服务器
+    var byteString = atob(dataUrl.split(',')[1]);
+    var mimeType = dataUrl.split(',')[0].split(':')[1].split(';')[0];
+    var ab = new ArrayBuffer(byteString.length);
+    var ia = new Uint8Array(ab);
+    for (var i = 0; i < byteString.length; i++) {
+        ia[i] = byteString.charCodeAt(i);
+    }
+    var blob = new Blob([ab], {type: mimeType});
+    var formData = new FormData();
+    formData.append('image', blob, 'android_image_' + Date.now() + '.jpg');
+    formData.append('sender_id', currentUser.id);
+    if (currentGroupId) formData.append('group_id', currentGroupId);
+    
+    showLoading();
+    fetch('/api/upload_image', {
+        method: 'POST',
+        body: formData
+    }).then(function(r) { return r.json(); }).then(function(data) {
+        hideLoading();
+        if (data.url && socket) {
+            if (currentGroupId) {
+                socket.emit('send_group_message', {
+                    group_id: currentGroupId,
+                    sender_id: currentUser.id,
+                    content: data.url,
+                    msg_type: 'image'
+                });
+            } else if (currentFriendId) {
+                socket.emit('send_message', {
+                    sender_id: currentUser.id,
+                    receiver_id: currentFriendId,
+                    content: data.url,
+                    msg_type: 'image'
+                });
+            }
+        }
+    }).catch(function() { hideLoading(); alert('图片上传失败'); });
+}
+
+// ===== 初始化：在 DOM 就绪后执行额外的初始化 =====
+if (document.readyState === 'complete') {
+    addImageButtons();
+    addLocationButton();
+} else {
+    window.addEventListener('load', function() {
+        addImageButtons();
+        addLocationButton();
+    });
 }
 
 document.addEventListener('DOMContentLoaded', function() {

@@ -66,6 +66,7 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         appContext = getApplicationContext();
+        setupImageLaunchers();
         Log.d(TAG, "=== MainActivity onCreate ===");
 
         // 创建容器
@@ -500,6 +501,156 @@ public class MainActivity extends Activity {
             if (pollService != null) {
                 pollService.setUserId(userId);
             }
+        }
+
+        @JavascriptInterface
+        public void pickImage() {
+            Log.d(TAG, "pickImage called from JS");
+            runOnUiThread(() -> {
+                Intent intent = new Intent(Intent.ACTION_PICK);
+                intent.setType("image/*");
+                startActivityForResult(intent, IMAGE_PICK_REQUEST_CODE);
+            });
+        }
+
+        @JavascriptInterface
+        public void pickImageFromCamera() {
+            Log.d(TAG, "pickImageFromCamera called from JS");
+            // Check camera permission
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                if (ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.CAMERA)
+                        != PackageManager.PERMISSION_GRANTED) {
+                    ActivityCompat.requestPermissions(MainActivity.this,
+                            new String[]{Manifest.permission.CAMERA}, CAMERA_PERMISSION_REQUEST_CODE);
+                    return;
+                }
+            }
+            runOnUiThread(() -> {
+                Intent intent = new Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE);
+                if (intent.resolveActivity(getPackageManager()) != null) {
+                    startActivityForResult(intent, CAMERA_CAPTURE_REQUEST_CODE);
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public boolean isOnline() {
+            android.net.ConnectivityManager cm = (android.net.ConnectivityManager)
+                    getSystemService(Context.CONNECTIVITY_SERVICE);
+            android.net.NetworkInfo networkInfo = cm.getActiveNetworkInfo();
+            return networkInfo != null && networkInfo.isConnected();
+        }
+
+        @JavascriptInterface
+        public String getOfflinePage() {
+            // Return the cached HTML for offline display
+            return "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1.0'><title>家庭聊天</title><style>body{font-family:-apple-system,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f5f5f5;color:#333;text-align:center;padding:20px;}h1{font-size:28px;color:#07c160;}p{font-size:16px;color:#888;line-height:1.8;}</style></head><body><div><h1>🏠 家庭聊天</h1><p>网络暂时断开<br>请检查网络连接后重试</p></div></body></html>";
+        }
+
+        @JavascriptInterface
+        public void saveImageToGallery(String base64Data, String fileName) {
+            Log.d(TAG, "saveImageToGallery: " + fileName);
+            try {
+                byte[] decoded = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT);
+                android.content.ContentValues values = new android.content.ContentValues();
+                values.put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, fileName);
+                values.put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/png");
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    values.put(android.provider.MediaStore.Images.Media.IS_PENDING, 1);
+                }
+                android.net.Uri uri = getContentResolver().insert(
+                        android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
+                if (uri != null) {
+                    java.io.OutputStream out = getContentResolver().openOutputStream(uri);
+                    if (out != null) {
+                        out.write(decoded);
+                        out.close();
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            values.clear();
+                            values.put(android.provider.MediaStore.Images.Media.IS_PENDING, 0);
+                            getContentResolver().update(uri, values, null, null);
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to save image", e);
+            }
+        }
+
+        @JavascriptInterface
+        public String getCrashLogs() {
+            String logs = FamilyChatApp.getRecentCrashLogs(MainActivity.this);
+            Log.d(TAG, "getCrashLogs called, length=" + logs.length());
+            return logs;
+        }
+    }
+
+    // 图片选择和相机请求码
+    private static final int IMAGE_PICK_REQUEST_CODE = 2001;
+    private static final int CAMERA_CAPTURE_REQUEST_CODE = 2002;
+
+    private void setupImageLaunchers() {
+        // Just a placeholder - uses startActivityForResult/onActivityResult
+        Log.d(TAG, "Image launchers ready (using startActivityForResult)");
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (resultCode != RESULT_OK) return;
+        
+        if (requestCode == IMAGE_PICK_REQUEST_CODE && data != null) {
+            android.net.Uri imageUri = data.getData();
+            if (imageUri != null) {
+                handleSelectedImage(imageUri);
+            }
+        } else if (requestCode == CAMERA_CAPTURE_REQUEST_CODE && data != null) {
+            android.graphics.Bitmap photo = (android.graphics.Bitmap) data.getExtras().get("data");
+            if (photo != null) {
+                handleCameraImage(photo);
+            }
+        }
+    }
+
+    private void handleSelectedImage(android.net.Uri imageUri) {
+        try {
+            java.io.InputStream inputStream = getContentResolver().openInputStream(imageUri);
+            byte[] bytes = new byte[inputStream.available()];
+            inputStream.read(bytes);
+            inputStream.close();
+            String b64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP);
+            String dataUrl = "data:image/jpeg;base64," + b64;
+            
+            // Call JavaScript to handle the image
+            runOnUiThread(() -> {
+                if (webView != null) {
+                    webView.evaluateJavascript(
+                        "javascript:(function(){try{window.handleAndroidImage&&window.handleAndroidImage('" + 
+                        dataUrl.replace("'", "\\'") + "');}catch(e){console.error(e);}})()", null);
+                }
+            });
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to handle image", e);
+        }
+    }
+
+    private void handleCameraImage(android.graphics.Bitmap photo) {
+        try {
+            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+            photo.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, baos);
+            byte[] bytes = baos.toByteArray();
+            String b64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP);
+            String dataUrl = "data:image/jpeg;base64," + b64;
+            
+            runOnUiThread(() -> {
+                if (webView != null) {
+                    webView.evaluateJavascript(
+                        "javascript:(function(){try{window.handleAndroidImage&&window.handleAndroidImage('" + 
+                        dataUrl.replace("'", "\\'") + "');}catch(e){console.error(e);}})()", null);
+                }
+            });
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to handle camera image", e);
         }
     }
 
