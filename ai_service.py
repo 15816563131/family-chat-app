@@ -120,19 +120,28 @@ def _get_ollama_model():
 
 
 def _call_ai(messages, stream=False, max_tokens=500, temperature=0.7):
-    """调用大模型 API（自动选择后端）"""
+    """调用大模型 API（自动选择后端，按优先级降级）"""
     if not is_ai_available():
         return None
 
+    result = None
     if _using_backend == 'remote':
-        return _call_openai_api(messages, stream, max_tokens, temperature)
+        result = _call_openai_api(messages, stream, max_tokens, temperature)
+        # API 失败（余额不足等）→ 尝试本地模型
+        if result is None:
+            logger.warning('[AI] 远程 API 失败，尝试本地 Ollama...')
+            result = _call_ollama(messages, stream, max_tokens, temperature)
+        if result is None:
+            logger.warning('[AI] Ollama 不可用，尝试 llama-cpp-python...')
+            result = _call_llamacpp(messages, stream, max_tokens, temperature)
     elif _using_backend == 'ollama':
-        return _call_ollama(messages, stream, max_tokens, temperature)
+        result = _call_ollama(messages, stream, max_tokens, temperature)
     elif _using_backend == 'llamacpp':
-        return _call_llamacpp(messages, stream, max_tokens, temperature)
+        result = _call_llamacpp(messages, stream, max_tokens, temperature)
     else:
         logger.error('[AI] 未知后端: %s', _using_backend)
-        return None
+
+    return result
 
 
 def _call_openai_api(messages, stream=False, max_tokens=500, temperature=0.7):
@@ -331,7 +340,7 @@ def ask_ai_stream(question):
     ], stream=True, max_tokens=500, temperature=0.7)
 
     if generator is None:
-        yield '⚠️ AI 服务暂时不可用，请稍后再试～'
+        yield '⚠️ AI 余额不足，请充值 DeepSeek 或安装免费本地模型（Ollama）'
         return
 
     for chunk in generator:

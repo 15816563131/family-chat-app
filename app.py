@@ -1369,6 +1369,62 @@ def get_recent_messages(user_id):
     return jsonify(result)
 
 
+# ===== 嵌入式 AI 聊天 API（用于插入其他网站） =====
+
+@app.route('/api/embed/chat', methods=['POST', 'OPTIONS'])
+def embed_ai_chat():
+    """嵌入式 AI 对话 API，返回 SSE 流式响应"""
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200, {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type',
+        }
+
+    data = request.get_json(force=True)
+    message = (data.get('message') or '').strip()
+    if not message:
+        return jsonify({'error': '消息不能为空'}), 400
+
+    def generate():
+        from ai_service import ask_ai_stream
+        with app.app_context():
+            for chunk in ask_ai_stream(message):
+                if chunk:
+                    yield 'data: ' + json.dumps({'content': chunk, 'done': False}, ensure_ascii=False) + '\n\n'
+            yield 'data: ' + json.dumps({'content': '', 'done': True}, ensure_ascii=False) + '\n\n'
+
+    return Response(generate(), mimetype='text/event-stream', headers={
+        'Cache-Control': 'no-cache',
+        'X-Accel-Buffering': 'no',
+        'Access-Control-Allow-Origin': '*'
+    })
+
+
+@app.route('/api/embed/status', methods=['GET', 'OPTIONS'])
+def embed_ai_status():
+    """检查 AI 服务状态"""
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200, {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type',
+        }
+
+    from ai_service import is_ai_available
+    available = is_ai_available()
+    return jsonify({
+        'available': available,
+        'message': 'AI 在线' if available else 'AI 离线，请安装本地模型或充值 API'
+    })
+
+
+@app.route('/embed')
+def embed_demo():
+    """AI 嵌入助手示例页面"""
+    return render_template('embed-demo.html')
+
+
 # ===== 新增：群组 API =====
 
 @app.route('/api/groups/create', methods=['POST'])
