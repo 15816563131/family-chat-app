@@ -195,6 +195,18 @@ function createSpeechRecognition() {
         isSpeechRecording = false;
         var btn = document.getElementById('voice-input-btn');
         if (btn) btn.textContent = '🎤';
+        // 检测"提醒"关键词，自动创建待办
+        if (transcript.indexOf('提醒') !== -1 && currentUser && currentUser.id) {
+            fetch('/api/voice/reminder', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    text: transcript,
+                    user_id: currentUser.id,
+                    group_id: currentGroupId || null
+                })
+            }).catch(function(){});
+        }
     };
     
     recog.onerror = function(event) {
@@ -1076,6 +1088,7 @@ async function loadFriends() {
 }
 
 async function loadFriendRequests() {
+    if (!currentUser || !currentUser.id) return;
     try {
         const response = await fetch(`/api/friend_requests/${currentUser.id}`);
         const requests = await response.json();
@@ -2249,7 +2262,7 @@ function initChat() {
         });
     
     socket = io({
-        transports: ['websocket', 'polling'],
+        transports: ['polling'],  // 只用 polling，服务器 threading 模式不支持 WebSocket
         reconnection: true,
         reconnectionAttempts: Infinity,
         reconnectionDelay: 1000,
@@ -2257,24 +2270,19 @@ function initChat() {
         timeout: 20000
     });
     
-    function updateConnectionStatus(status, text) {
-        const statusElement = document.getElementById('connection-status');
-        if (statusElement) {
-            statusElement.style.color = status;
-            statusElement.textContent = text;
+    // ===== 保活机制：定期发送心跳保持连接 =====
+    setInterval(() => {
+        if (socket && socket.connected) {
+            socket.emit('heartbeat', { ts: Date.now() });
         }
-    }
-    
-    function showSyncStatus(message, isError = false) {
-        console.log(message);
-    }
+    }, 15000);  // 每15秒发送一次心跳
     
     socket.on('connect', () => {
         console.log('✅ 已连接到服务器');
         isConnected = true;
-        updateConnectionStatus('#4CAF50', '● 已连接');
-        showSyncStatus('连接成功，开始同步消息...');
-        socket.emit('join', { user_id: currentUser.id });
+        if (currentUser && currentUser.id) {
+            socket.emit('join', { user_id: currentUser.id });
+        }
         
         if (currentFriendId) {
             loadMessages(currentFriendId);
@@ -2285,15 +2293,11 @@ function initChat() {
     socket.on('disconnect', (reason) => {
         console.log('❌ 与服务器断开连接:', reason);
         isConnected = false;
-        updateConnectionStatus('#FF5722', '● 已断开');
-        showSyncStatus('连接断开，正在尝试重新连接...', true);
     });
     
     socket.on('reconnect', (attemptNumber) => {
         console.log('🔄 重连成功');
         isConnected = true;
-        updateConnectionStatus('#4CAF50', '● 已连接');
-        showSyncStatus('已重连，正在同步...');
         socket.emit('join', { user_id: currentUser.id });
         
         if (currentFriendId) {
@@ -2304,17 +2308,80 @@ function initChat() {
     
     socket.on('reconnect_attempt', (attemptNumber) => {
         console.log(`🔄 正在尝试重连... (第${attemptNumber}次)`);
-        updateConnectionStatus('#FFC107', '● 重连中');
     });
     
     socket.on('reconnect_error', (error) => {
         console.log('❌ 重连失败:', error);
-        showSyncStatus('重连失败，继续尝试...', true);
     });
     
     socket.on('receive_message', (message) => {
         console.log('📨 收到消息:', message);
         handleReceivedMessage(message);
+    });
+
+    // ===== AI 流式回答（打字机效果） =====
+    socket.on('ai_message', (data) => {
+        var groupId = data.group_id;
+        var content = data.content || '';
+        var done = data.done || false;
+
+        var aiIndicator = document.getElementById('ai-typing-' + groupId);
+        if (!aiIndicator && !done) {
+            // 创建 AI 打字指示器
+            var messagesContainer = document.querySelector('#group-chat-window .messages-container');
+            if (!messagesContainer) return;
+            aiIndicator = document.createElement('div');
+            aiIndicator.id = 'ai-typing-' + groupId;
+            aiIndicator.className = 'message ai-typing';
+            aiIndicator.innerHTML = '<div class="message-content"><span class="ai-typing-text"></span></div>';
+            messagesContainer.appendChild(aiIndicator);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        if (aiIndicator && !done) {
+            var textEl = aiIndicator.querySelector('.ai-typing-text');
+            if (textEl) {
+                textEl.textContent += content;
+                var container = document.querySelector('#group-chat-window .messages-container');
+                if (container) container.scrollTop = container.scrollHeight;
+            }
+        }
+
+        if (done && aiIndicator) {
+            aiIndicator.remove();
+        }
+    });
+
+    // ===== DeepSeek AI 私聊流式回答（打字机效果） =====
+    socket.on('ai_private_message', (data) => {
+        var userId = data.user_id;
+        var content = data.content || '';
+        var done = data.done || false;
+
+        var aiIndicator = document.getElementById('ai-private-typing');
+        if (!aiIndicator && !done) {
+            var messagesContainer = document.querySelector('#chat-window .messages-container');
+            if (!messagesContainer) return;
+            aiIndicator = document.createElement('div');
+            aiIndicator.id = 'ai-private-typing';
+            aiIndicator.className = 'message ai-typing';
+            aiIndicator.innerHTML = '<div class="message-content"><span class="ai-typing-text"></span></div>';
+            messagesContainer.appendChild(aiIndicator);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        if (aiIndicator && !done) {
+            var textEl = aiIndicator.querySelector('.ai-typing-text');
+            if (textEl) {
+                textEl.textContent += content;
+                var container = document.querySelector('#chat-window .messages-container');
+                if (container) container.scrollTop = container.scrollHeight;
+            }
+        }
+
+        if (done && aiIndicator) {
+            aiIndicator.remove();
+        }
     });
     
     socket.on('message_recalled', (data) => {
@@ -2381,6 +2448,9 @@ function initChat() {
     if (isSeniorMode) {
         document.documentElement.classList.add('senior-mode');
     }
+    
+    // 注册 Service Worker + 推送订阅
+    registerServiceWorker();
     
     setInterval(() => {
         loadFriendRequests();
@@ -2805,7 +2875,11 @@ function closeImagePreview() {
 function addImageButtons() {
     var inputArea = document.querySelector('#chat-window .message-input');
     if (inputArea) {
+        // 移除旧的按钮（防重复）
+        var oldBtn = inputArea.querySelector('#img-btn');
+        if (oldBtn) oldBtn.remove();
         var imgBtn = document.createElement('button');
+        imgBtn.id = 'img-btn';
         imgBtn.className = 'voice-input-btn';
         imgBtn.textContent = '🖼️';
         imgBtn.title = '发送图片';
@@ -2815,7 +2889,10 @@ function addImageButtons() {
     }
     var groupInputArea = document.querySelector('#group-chat-window .message-input');
     if (groupInputArea) {
+        var oldGBtn = groupInputArea.querySelector('#group-img-btn');
+        if (oldGBtn) oldGBtn.remove();
         var gImgBtn = document.createElement('button');
+        gImgBtn.id = 'group-img-btn';
         gImgBtn.className = 'voice-input-btn';
         gImgBtn.textContent = '🖼️';
         gImgBtn.title = '发送图片';
@@ -2998,6 +3075,51 @@ function toggleSeniorMode() {
     isSeniorMode = !isSeniorMode;
     localStorage.setItem('seniorMode', isSeniorMode);
     document.documentElement.classList.toggle('senior-mode', isSeniorMode);
+}
+
+function togglePushNotifications() {
+    if (!('Notification' in window)) {
+        showToast('⚠️ 此浏览器不支持推送通知');
+        return;
+    }
+    if (Notification.permission === 'granted') {
+        showToast('✅ 推送通知已开启');
+        // 手动发起一次注册
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.ready.then(function(reg) {
+                subscribePush(reg);
+            });
+        }
+    } else if (Notification.permission === 'denied') {
+        showToast('⚠️ 通知被拒绝，请在浏览器设置中开启');
+    } else {
+        Notification.requestPermission().then(function(permission) {
+            if (permission === 'granted') {
+                showToast('✅ 推送通知已开启');
+                if ('serviceWorker' in navigator) {
+                    navigator.serviceWorker.ready.then(function(reg) {
+                        subscribePush(reg);
+                    });
+                }
+            } else {
+                showToast('⚠️ 通知权限被拒绝');
+            }
+        });
+    }
+}
+
+function showToast(msg) {
+    var existing = document.getElementById('toast-msg');
+    if (existing) existing.remove();
+    var el = document.createElement('div');
+    el.id = 'toast-msg';
+    el.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.8);color:#fff;padding:10px 20px;border-radius:20px;font-size:14px;z-index:9999;max-width:80%;text-align:center;white-space:nowrap;transition:opacity 0.3s;';
+    el.textContent = msg;
+    document.body.appendChild(el);
+    setTimeout(function() {
+        el.style.opacity = '0';
+        setTimeout(function() { el.remove(); }, 300);
+    }, 2500);
 }
 
 // ===== 7. 聊天导出 =====
@@ -3202,7 +3324,11 @@ function sendLocation() {
 function addLocationButton() {
     var inputAreas = document.querySelectorAll('.message-input');
     inputAreas.forEach(function(area) {
+        // 移除旧的按钮（防重复）
+        var oldLoc = area.querySelector('#loc-btn');
+        if (oldLoc) oldLoc.remove();
         var locBtn = document.createElement('button');
+        locBtn.id = 'loc-btn';
         locBtn.className = 'voice-input-btn';
         locBtn.textContent = '📍';
         locBtn.title = '发送位置';
@@ -3256,16 +3382,100 @@ function handleAndroidImage(dataUrl) {
     }).catch(function() { hideLoading(); alert('图片上传失败'); });
 }
 
-// ===== 初始化：在 DOM 就绪后执行额外的初始化 =====
-if (document.readyState === 'complete') {
-    addImageButtons();
-    addLocationButton();
-} else {
-    window.addEventListener('load', function() {
-        addImageButtons();
-        addLocationButton();
-    });
+// ===== PWA: Service Worker 注册 + 推送订阅 =====
+function registerServiceWorker() {
+    if (!('serviceWorker' in navigator)) {
+        console.log('[PWA] Service Worker 不支持');
+        return;
+    }
+    // 延迟注册，避免阻塞首次渲染
+    setTimeout(function() {
+        navigator.serviceWorker.register('/static/sw.js', {scope: '/'})
+            .then(function(reg) {
+                console.log('[PWA] Service Worker 注册成功:', reg.scope);
+                // 等待激活后再订阅推送
+                if (reg.active) {
+                    subscribePush(reg);
+                } else {
+                    reg.addEventListener('activate', function() {
+                        subscribePush(reg);
+                    });
+                }
+                // 检测更新
+                reg.addEventListener('updatefound', function() {
+                    var newWorker = reg.installing;
+                    newWorker.addEventListener('statechange', function() {
+                        if (newWorker.state === 'activated') {
+                            console.log('[PWA] 新版本已激活');
+                            showToast('🔄 新版本已就绪，刷新后生效');
+                        }
+                    });
+                });
+            })
+            .catch(function(err) {
+                console.log('[PWA] Service Worker 注册失败:', err);
+            });
+    }, 1000);
 }
+
+function subscribePush(reg) {
+    if (!('PushManager' in window)) {
+        console.log('[PWA] Push API 不支持');
+        return;
+    }
+    if (!currentUser || !currentUser.id) return;
+
+    // 先获取 VAPID 公钥
+    fetch('/api/push/vapid-public-key')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (!data.public_key) return;
+            var applicationServerKey = urlBase64ToUint8Array(data.public_key);
+            return reg.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: applicationServerKey
+            });
+        })
+        .then(function(sub) {
+            if (!sub) return;
+            // 发送到后端保存
+            fetch('/api/push/subscribe', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    user_id: currentUser.id,
+                    subscription: sub.toJSON()
+                })
+            }).then(function(r) { return r.json(); }).then(function(resp) {
+                if (resp.success) console.log('[PWA] 推送订阅成功');
+            });
+        })
+        .catch(function(err) {
+            // 用户拒绝权限或出错，静默处理
+            if (err.name === 'NotAllowedError') {
+                console.log('[PWA] 通知权限被拒绝');
+            } else if (err.name === 'AbortError') {
+                console.log('[PWA] 推送订阅被中止（HTTP 环境常见）');
+            } else {
+                console.log('[PWA] 推送订阅失败:', err.message);
+            }
+        });
+}
+
+// 工具：将 Base64 URL-Safe 字符串转为 Uint8Array（Push API 需要）
+function urlBase64ToUint8Array(base64String) {
+    var padding = '='.repeat((4 - base64String.length % 4) % 4);
+    var base64 = (base64String + padding).replace(/\-/g, '+').replace(/_/g, '/');
+    var rawData = window.atob(base64);
+    var output = new Uint8Array(rawData.length);
+    for (var i = 0; i < rawData.length; ++i) {
+        output[i] = rawData.charCodeAt(i);
+    }
+    return output;
+}
+
+// ===== 初始化：在 DOM 就绪后执行额外的初始化 =====
+// 按钮重复问题已通过防重复 ID 机制解决，底部不再需要独立调用
 
 document.addEventListener('DOMContentLoaded', function() {
     const savedUser = localStorage.getItem('currentUser');

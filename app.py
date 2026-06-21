@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, jsonify, send_file, Response
 from flask_sqlalchemy import SQLAlchemy
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_cors import CORS
@@ -15,8 +15,12 @@ import re
 import subprocess
 import glob
 import uuid
+from config import load_env
 
-app = Flask(__name__)
+# 加载 .env 配置（必须在 app 初始化之前）
+load_env()
+
+app = Flask(__name__)  # 恢复默认静态文件处理
 
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'family-chat-secret-key-2024')
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///family_chat.db').replace('postgres://', 'postgresql://')
@@ -24,6 +28,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'pool_pre_ping': True, 'pool_recycle': 300}
 app.config['UPLOAD_FOLDER'] = os.environ.get('UPLOAD_FOLDER', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'uploads'))
 app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024  # 20MB (支持语音文件)
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 60 * 60 * 24 * 7  # 静态文件默认缓存7天
 
 # ---------------- 日志分级配置 ----------------
 LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO').upper()
@@ -50,6 +55,114 @@ migrate = Migrate(app, db)
 def attach_request_id():
     request._request_id = request.headers.get('X-Request-ID', uuid.uuid4().hex[:12])
     request._start_time = time.time()
+
+
+# ---------------- 自定义静态文件处理：强制设置缓存头 + gzip 压缩 ----------------
+# 替代 WSGI 中间件，直接控制 send_static_file 的返回
+import gzip as _gzip
+
+_original_send_static_file = app.send_static_file
+
+def _optimized_send_static_file(filename):
+    """自定义静态文件处理：强制设置缓存头 + gzip 压缩"""
+    ext = filename.rsplit('.', 1)[1].lower() if '.' in filename else ''
+
+    # 读取文件内容（在 send_file 之前）
+    full_path = os.path.join(app.static_folder, filename)
+    data = None
+    try:
+        with open(full_path, 'rb') as f:
+            data = f.read()
+    except Exception:
+        # 读不到文件时回退到原始方法
+        return _original_send_static_file(filename)
+
+    # MIME 类型
+    mime_map = {
+        'css': 'text/css; charset=utf-8',
+        'js': 'application/javascript; charset=utf-8',
+        'jpg': 'image/jpeg', 'jpeg': 'image/jpeg',
+        'gif': 'image/gif', 'webp': 'image/webp',
+        'svg': 'image/svg+xml',
+        'png': 'image/png',
+        'html': 'text/html; charset=utf-8',
+        'htm': 'text/html; charset=utf-8',
+        'json': 'application/json; charset=utf-8',
+        'xml': 'application/xml; charset=utf-8',
+        'mp3': 'audio/mpeg', 'wav': 'audio/wav',
+        'woff': 'font/woff', 'woff2': 'font/woff2',
+        'ttf': 'font/ttf', 'eot': 'application/vnd.ms-fontobject',
+        'otf': 'font/otf',
+        'ico': 'image/x-icon',
+    }
+    content_type = mime_map.get(ext, 'application/octet-stream')
+
+    # gzip 压缩（只对文本类资源）
+    ae = request.headers.get('Accept-Encoding', '') if request else ''
+    is_gzip = False
+    if 'gzip' in ae.lower() and ext in ('css', 'js', 'svg', 'html', 'htm', 'json', 'xml'):
+        if data and len(data) > 512:
+            try:
+                data = _gzip.compress(data, compresslevel=6)
+                is_gzip = True
+            except Exception:
+                pass
+
+    # 构造响应
+    resp = Response(data, mimetype=content_type)
+
+    # 强制设置缓存头（覆盖 Flask 默认的 no-cache）
+    if ext in ('jpg', 'jpeg', 'png', 'gif', 'webp', 'woff',
+                'woff2', 'ttf', 'eot', 'otf', 'svg', 'mp3', 'wav', 'ico'):
+        resp.headers['Cache-Control'] = 'public, max-age=2592000, immutable'
+    elif ext in ('css', 'js'):
+        resp.headers['Cache-Control'] = 'public, max-age=604800'
+    else:
+        resp.headers['Cache-Control'] = 'public, max-age=3600'
+
+    if is_gzip:
+        resp.headers['Content-Encoding'] = 'gzip'
+        resp.headers['Vary'] = 'Accept-Encoding'
+
+    return resp
+
+app.send_static_file = _optimized_send_static_file
+# 关键：Flask 在路由注册时已捕获原始方法引用，需要替换 view_functions
+if 'static' in app.view_functions:
+    app.view_functions['static'] = _optimized_send_static_file
+
+
+@app.after_request
+def optimize_response(response):
+    """给非静态响应添加缓存头 + gzip 压缩"""
+    path = request.path.lower()
+    if path.startswith('/static/'):
+        return response
+
+    # HTML/主页：不缓存
+    if path.endswith('.html') or path == '/' or path.endswith('/'):
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response.headers['Pragma'] = 'no-cache'
+    elif request.method == 'GET' and 'api' in path:
+        response.headers['Cache-Control'] = 'public, max-age=10'
+
+    # 对非静态文本类响应也应用 gzip
+    ae = request.headers.get('Accept-Encoding', '') or ''
+    if 'gzip' in ae.lower() and not response.headers.get('Content-Encoding'):
+        ct = (response.headers.get('Content-Type') or '').lower()
+        if ct.startswith(('text/', 'application/json', 'application/javascript',
+                          'application/xml')):
+            try:
+                data = response.get_data(as_text=False)
+                if data and len(data) > 512:
+                    compressed = _gzip.compress(data, compresslevel=6)
+                    response.set_data(compressed)
+                    response.headers['Content-Encoding'] = 'gzip'
+                    response.headers['Vary'] = 'Accept-Encoding'
+                    response.headers.pop('Content-Length', None)
+            except Exception:
+                pass
+    return response
 
 
 @app.after_request
@@ -193,6 +306,31 @@ class VisitLog(db.Model):
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
 
+# ===== PWA 推送订阅 =====
+class PushSubscription(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    endpoint = db.Column(db.Text, nullable=False)
+    p256dh_key = db.Column(db.Text, nullable=False)
+    auth_key = db.Column(db.Text, nullable=False)
+    user_agent = db.Column(db.String(500), default='')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+# ===== AI 每日摘要日志（费用控制：每个群每天只生成一次）=====
+class DailySummaryLog(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    group_id = db.Column(db.Integer, db.ForeignKey('group.id'), nullable=False)
+    summary_date = db.Column(db.Date, nullable=False)  # 摘要日期（UTC）
+    summary_text = db.Column(db.Text, default='')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint('group_id', 'summary_date', name='uq_group_summary_date'),
+    )
+
+
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -206,6 +344,538 @@ def manifest():
 @app.route('/static/sw.js')
 def service_worker():
     return send_file('static/sw.js', mimetype='application/javascript')
+
+
+# ===== PWA 推送：VAPID 密钥管理 =====
+VAPID_KEYS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.vapid_keys.json')
+
+def _get_vapid_keys():
+    """获取或生成 VAPID 密钥对"""
+    if os.path.exists(VAPID_KEYS_FILE):
+        try:
+            with open(VAPID_KEYS_FILE, 'r') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    # 生成新密钥
+    try:
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.backends import default_backend
+        import base64
+        private_key = ec.generate_private_key(ec.SECP256R1(), default_backend())
+        public_key = private_key.public_key()
+        vapid_private = base64.urlsafe_b64encode(
+            private_key.private_bytes(
+                serialization.Encoding.DER,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption()
+            )
+        ).decode('utf-8').rstrip('=')
+        vapid_public = base64.urlsafe_b64encode(
+            public_key.public_bytes(
+                serialization.Encoding.X962,
+                serialization.PublicFormat.UncompressedPoint
+            )
+        ).decode('utf-8').rstrip('=')
+        keys = {'public_key': vapid_public, 'private_key': vapid_private}
+        with open(VAPID_KEYS_FILE, 'w') as f:
+            json.dump(keys, f)
+        logger.info('[VAPID] 新密钥对已生成并保存')
+        return keys
+    except ImportError:
+        logger.warning('[VAPID] cryptography 未安装，使用内置占位密钥')
+        # 内置占位密钥（仅用于开发环境）
+        return {
+            'public_key': 'BIm0a6RzXeQT0qE7ZxK1Vh_TVmzYp8y2LQ5fG4dNc3o9wAeXsYjMnOpQrStUvWxYz',
+            'private_key': 'AIzaSyDeQwE3JtFkMnOpQrStUvWxYz1234567890abcdef'
+        }
+
+def _get_vapid_claims():
+    """获取 VAPID claims（用于推送验证）"""
+    keys = _get_vapid_keys()
+    origin = request.host_url.rstrip('/') if request else 'http://localhost:8080'
+    return {
+        'sub': 'mailto:admin@familychat.local',
+        'aud': origin
+    }
+
+
+@app.route('/api/push/vapid-public-key', methods=['GET'])
+def get_vapid_public_key():
+    """返回 VAPID 公钥供前端订阅"""
+    keys = _get_vapid_keys()
+    return jsonify({'public_key': keys['public_key']})
+
+
+@app.route('/api/push/subscribe', methods=['POST'])
+def subscribe_push():
+    """保存用户的推送订阅信息"""
+    user_id = request.json.get('user_id')
+    subscription = request.json.get('subscription')
+    if not user_id or not subscription:
+        return jsonify({'error': '缺少参数'}), 400
+    
+    endpoint = subscription.get('endpoint', '')
+    keys = subscription.get('keys', {})
+    
+    # 检查同一 endpoint 是否已存在
+    existing = PushSubscription.query.filter_by(endpoint=endpoint).first()
+    if existing:
+        existing.user_id = user_id
+        existing.p256dh_key = keys.get('p256dh', '')
+        existing.auth_key = keys.get('auth', '')
+        existing.user_agent = request.headers.get('User-Agent', '')
+        existing.updated_at = datetime.utcnow()
+    else:
+        sub = PushSubscription(
+            user_id=user_id,
+            endpoint=endpoint,
+            p256dh_key=keys.get('p256dh', ''),
+            auth_key=keys.get('auth', ''),
+            user_agent=request.headers.get('User-Agent', '')
+        )
+        db.session.add(sub)
+    
+    db.session.commit()
+    return jsonify({'success': True, 'message': '推送订阅成功'})
+
+
+@app.route('/api/push/unsubscribe', methods=['POST'])
+def unsubscribe_push():
+    """删除推送订阅"""
+    endpoint = request.json.get('endpoint', '')
+    if endpoint:
+        PushSubscription.query.filter_by(endpoint=endpoint).delete()
+        db.session.commit()
+    return jsonify({'success': True})
+
+
+def send_push_notification(user_id, title, body, url='/'):
+    """向指定用户发送推送通知（后台异步执行）"""
+    from threading import Thread
+    Thread(target=_do_send_push, args=(user_id, title, body, url), daemon=True).start()
+
+def _do_send_push(user_id, title, body, url):
+    """实际发送推送（在子线程中执行）"""
+    try:
+        subs = PushSubscription.query.filter_by(user_id=user_id).all()
+        if not subs:
+            return
+        
+        keys = _get_vapid_keys()
+        vapid_private_key = keys['private_key']
+        vapid_public_key = keys['public_key']
+        
+        payload = json.dumps({
+            'title': title,
+            'body': body,
+            'url': url,
+            'tag': 'family-chat-' + str(int(time.time()))
+        })
+        
+        for sub in subs:
+            try:
+                _send_webpush(
+                    endpoint=sub.endpoint,
+                    p256dh=sub.p256dh_key,
+                    auth=sub.auth_key,
+                    payload=payload,
+                    vapid_private=vapid_private_key,
+                    vapid_public=vapid_public_key
+                )
+            except Exception as e:
+                logger.warning('[Push] 发送失败 (endpoint=%s...): %s', sub.endpoint[:50], e)
+    except Exception as e:
+        logger.error('[Push] 推送线程异常: %s', e)
+
+def _send_webpush(endpoint, p256dh, auth, payload, vapid_private, vapid_public):
+    """实际发送 Web Push 消息"""
+    try:
+        from pywebpush import webpush, WebPushException
+        webpush(
+            subscription_info={
+                'endpoint': endpoint,
+                'keys': {
+                    'p256dh': p256dh,
+                    'auth': auth
+                }
+            },
+            data=payload,
+            vapid_private_key=vapid_private,
+            vapid_claims={
+                'sub': 'mailto:admin@familychat.local'
+            }
+        )
+    except ImportError:
+        # 降级方案：手动发送（使用 http_ece 加密）
+        try:
+            import http_ece
+            import base64
+            import requests
+            
+            # 解码密钥
+            p256dh_bytes = base64.urlsafe_b64decode(p256dh + '==')
+            auth_bytes = base64.urlsafe_b64decode(auth + '==')
+            
+            # 加密 payload
+            encrypted = http_ece.encrypt(payload.encode('utf-8'), key=p256dh_bytes, auth_secret=auth_bytes)
+            
+            # 构建加密头
+            salt = base64.urlsafe_b64encode(encrypted['salt']).rstrip(b'=').decode('utf-8')
+            dh = base64.urlsafe_b64encode(encrypted['server_public']).rstrip(b'=').decode('utf-8')
+            
+            headers = {
+                'Content-Type': 'application/octet-stream',
+                'Content-Encoding': 'aes128gcm',
+                'Encryption': 'salt=' + salt,
+                'Crypto-Key': 'dh=' + dh,
+                'TTL': '86400'
+            }
+            
+            requests.post(endpoint, data=encrypted['body'], headers=headers, timeout=10)
+        except ImportError:
+            logger.warning('[Push] 加密库未安装，无法发送推送。安装: pip install pywebpush')
+    except WebPushException as e:
+        if e.response and e.response.status_code == 410:
+            logger.info('[Push] 订阅已过期，可清理')
+        else:
+            raise e
+
+
+# ===== DeepSeek AI 好友自动添加 =====
+AI_USER_USERNAME = 'DeepSeek AI'
+
+def _get_ai_user():
+    """获取或创建 DeepSeek AI 用户"""
+    ai = User.query.filter_by(username=AI_USER_USERNAME).first()
+    if not ai:
+        ai = User(username=AI_USER_USERNAME)
+        ai.set_password('ai_internal_' + uuid.uuid4().hex[:12])
+        ai.bio = '🤖 我是 DeepSeek AI 助手，可以回答你的任何问题~'
+        ai.avatar = '/static/icon-192.png'
+        db.session.add(ai)
+        db.session.commit()
+        logger.info('[AI] DeepSeek AI 用户已创建 (id=%d)', ai.id)
+    return ai
+
+def _auto_add_ai_friend(user_id):
+    """自动将 DeepSeek AI 添加为好友"""
+    ai = _get_ai_user()
+    if ai.id == user_id:
+        return
+    existing = Friendship.query.filter(
+        ((Friendship.user1_id == user_id) & (Friendship.user2_id == ai.id)) |
+        ((Friendship.user1_id == ai.id) & (Friendship.user2_id == user_id))
+    ).first()
+    if not existing:
+        friendship = Friendship(user1_id=user_id, user2_id=ai.id)
+        db.session.add(friendship)
+        db.session.commit()
+        logger.info('[AI] 已为用户 %d 自动添加 AI 好友', user_id)
+
+
+def _handle_ai_private_chat(user_id, question, reply_to_msg_id):
+    """后台线程处理 DeepSeek AI 私聊，通过 SocketIO 推送流式回答"""
+    from ai_service import ask_ai_stream, is_ai_available
+    import time as _time
+
+    if not is_ai_available():
+        socketio.emit('ai_private_message', {
+            'user_id': user_id,
+            'content': '⚠️ AI 服务暂未配置，请联系管理员设置 API Key',
+            'done': True,
+            'reply_to': reply_to_msg_id
+        }, room=str(user_id))
+        return
+
+    full_reply = ''
+
+    try:
+        for chunk in ask_ai_stream(question):
+            if chunk:
+                full_reply += chunk
+                socketio.emit('ai_private_message', {
+                    'user_id': user_id,
+                    'content': chunk,
+                    'done': False,
+                    'reply_to': reply_to_msg_id
+                }, room=str(user_id))
+                _time.sleep(0.02)
+
+        if full_reply:
+            # 保存 AI 回复为私聊消息
+            ai_user = _get_ai_user()
+            msg = Message(
+                sender_id=ai_user.id,
+                receiver_id=user_id,
+                content=full_reply,
+                msg_type='text'
+            )
+            db.session.add(msg)
+            db.session.commit()
+
+            sender = User.query.get(ai_user.id)
+            message_data = {
+                'id': msg.id,
+                'sender_id': ai_user.id,
+                'receiver_id': user_id,
+                'sender_name': sender.username if sender else 'DeepSeek AI',
+                'content': full_reply,
+                'msg_type': 'text',
+                'voice_url': '',
+                'voice_duration': 0,
+                'timestamp': msg.timestamp.isoformat(),
+                'is_mine': False,
+                'recalled': False
+            }
+            socketio.emit('receive_message', message_data, room=str(user_id))
+            socketio.emit('ai_private_message', {
+                'user_id': user_id,
+                'content': '',
+                'done': True,
+                'full_content': full_reply,
+                'reply_to': reply_to_msg_id
+            }, room=str(user_id))
+    except Exception as e:
+        logger.error('[AI] 私聊回答异常: %s', e)
+        socketio.emit('ai_private_message', {
+            'user_id': user_id,
+            'content': '⚠️ AI 回答出错了，请稍后再试',
+            'done': True,
+            'reply_to': reply_to_msg_id
+        }, room=str(user_id))
+
+
+# ===== AI 助手功能 ===========================================================
+def _handle_ai_group_question(group_id, sender_id, question):
+    """后台线程处理 @AI 群聊问题，通过 SocketIO 推送流式回答"""
+    from ai_service import ask_ai_stream, is_ai_available
+    import time as _time
+
+    if not is_ai_available():
+        socketio.emit('ai_message', {
+            'group_id': group_id,
+            'content': '⚠️ AI 服务暂未配置，请联系管理员设置 API Key',
+            'done': True
+        }, room=f'group_{group_id}')
+        return
+
+    room = f'group_{group_id}'
+    full_reply = ''
+
+    try:
+        for chunk in ask_ai_stream(question):
+            if chunk:
+                full_reply += chunk
+                socketio.emit('ai_message', {
+                    'group_id': group_id,
+                    'content': chunk,
+                    'done': False
+                }, room=room)
+                _time.sleep(0.02)  # 控制流式速度，模拟打字机效果
+
+        # 流式结束，保存为群消息
+        if full_reply:
+            _save_ai_group_message(group_id, sender_id, full_reply)
+            socketio.emit('ai_message', {
+                'group_id': group_id,
+                'content': '',
+                'done': True,
+                'full_content': full_reply
+            }, room=room)
+    except Exception as e:
+        logger.error('[AI] 回答异常: %s', e)
+        socketio.emit('ai_message', {
+            'group_id': group_id,
+            'content': '⚠️ AI 回答出错了，请稍后再试',
+            'done': True
+        }, room=room)
+
+
+def _save_ai_group_message(group_id, sender_id, content):
+    """将 AI 回答保存为群聊系统消息"""
+    try:
+        msg = GroupMessage(
+            group_id=group_id,
+            sender_id=sender_id,
+            content=content,
+            msg_type='text',
+            mentions='[]'
+        )
+        db.session.add(msg)
+        db.session.commit()
+
+        sender = User.query.get(sender_id)
+        message_data = {
+            'id': msg.id,
+            'group_id': group_id,
+            'sender_id': sender_id,
+            'sender_name': '🤖 AI助手',
+            'content': content,
+            'msg_type': 'text',
+            'voice_url': '',
+            'voice_duration': 0,
+            'mentions': [],
+            'reply_to': None,
+            'timestamp': msg.timestamp.isoformat(),
+            'recalled': False
+        }
+        socketio.emit('receive_group_message', message_data, room=f'group_{group_id}')
+    except Exception as e:
+        logger.error('[AI] 保存AI消息失败: %s', e)
+
+
+# ===== AI 每日摘要定时器 =====
+def _start_summary_scheduler():
+    """启动后台线程，每分钟检查是否需要生成每日摘要"""
+    import threading as _th
+    import time as _time_mod
+
+    def _check_loop():
+        while True:
+            try:
+                _generate_daily_summaries()
+            except Exception as e:
+                logger.error('[Summary] 摘要生成异常: %s', e)
+            _time_mod.sleep(60)  # 每分钟检查一次
+
+    _th.Thread(target=_check_loop, daemon=True).start()
+    logger.info('[Summary] 每日摘要定时器已启动')
+
+
+def _generate_daily_summaries():
+    """检查并生成所有群组的每日摘要（每个群每天最多一次）"""
+    from ai_service import generate_summary, is_ai_available
+    from datetime import date
+
+    if not is_ai_available():
+        return
+
+    today = date.today()
+    now = datetime.utcnow()
+    # 只在 8:00-8:10 之间尝试生成（避免多次尝试）
+    if now.hour != 8 or now.minute > 10:
+        return
+
+    groups = Group.query.all()
+    for group in groups:
+        try:
+            # 检查今天是否已生成
+            existing = DailySummaryLog.query.filter_by(
+                group_id=group.id,
+                summary_date=today
+            ).first()
+            if existing:
+                continue
+
+            # 获取最近 24 小时的消息
+            since = now - timedelta(hours=24)
+            messages = GroupMessage.query.filter(
+                GroupMessage.group_id == group.id,
+                GroupMessage.timestamp >= since,
+                GroupMessage.msg_type == 'text'
+            ).order_by(GroupMessage.timestamp.asc()).all()
+
+            if not messages:
+                # 没有消息，记录空摘要
+                log = DailySummaryLog(
+                    group_id=group.id,
+                    summary_date=today,
+                    summary_text='昨天群里比较安静'
+                )
+                db.session.add(log)
+                db.session.commit()
+                continue
+
+            # 拼接消息文本
+            users = {u.id: u.username for u in User.query.all()}
+            lines = []
+            for m in messages:
+                name = users.get(m.sender_id, f'用户{m.sender_id}')
+                lines.append(f'{name}: {m.content}')
+            messages_text = '\n'.join(lines)
+
+            # 调用 AI 生成摘要
+            summary = generate_summary(messages_text)
+
+            # 保存日志
+            log = DailySummaryLog(
+                group_id=group.id,
+                summary_date=today,
+                summary_text=summary
+            )
+            db.session.add(log)
+            db.session.commit()
+
+            # 以 system 消息推送给群成员
+            _save_ai_group_message(group.id, 1, summary)
+            logger.info('[Summary] 群 %s 摘要已生成: %s', group.name, summary[:50])
+
+        except Exception as e:
+            logger.error('[Summary] 群 %d 摘要失败: %s', group.id, e)
+            db.session.rollback()
+
+
+# ===== AI 语音提醒 =====
+def _check_voice_reminder(voice_text, user_id, group_id=None):
+    """检查语音消息是否包含提醒意图，是则创建待办"""
+    from ai_service import extract_reminder
+
+    result = extract_reminder(voice_text)
+    if not result:
+        return
+
+    content = result.get('content', voice_text)
+    time_desc = result.get('time', '')
+
+    try:
+        # 如果有群组，在群组下创建待办
+        if group_id:
+            # 查找或创建该群的待办清单
+            todo_list = TodoList.query.filter_by(
+                group_id=group_id,
+                title='AI 语音提醒'
+            ).first()
+            if not todo_list:
+                todo_list = TodoList(
+                    group_id=group_id,
+                    title='AI 语音提醒',
+                    created_by=user_id
+                )
+                db.session.add(todo_list)
+                db.session.commit()
+
+            reminder_text = content
+            if time_desc:
+                reminder_text += f'（{time_desc}）'
+
+            item = TodoItem(
+                todo_list_id=todo_list.id,
+                user_id=user_id,
+                content=reminder_text,
+                done=False
+            )
+            db.session.add(item)
+            db.session.commit()
+
+            # 推送通知
+            user = User.query.get(user_id)
+            username = user.username if user else '某位家庭成员'
+            socketio.emit('receive_group_message', {
+                'id': 0,
+                'group_id': group_id,
+                'sender_id': 1,
+                'sender_name': '🤖 AI助手',
+                'content': f'📌 已为 {username} 创建语音提醒：{reminder_text}',
+                'msg_type': 'text',
+                'timestamp': datetime.utcnow().isoformat()
+            }, room=f'group_{group_id}')
+
+            logger.info('[Reminder] 语音提醒已创建: %s', reminder_text)
+    except Exception as e:
+        logger.error('[Reminder] 创建提醒失败: %s', e)
+        db.session.rollback()
 
 
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp', 'webm', 'mp3', 'ogg', 'wav', 'amr'}
@@ -289,6 +959,19 @@ def upload_voice():
     return jsonify({'url': voice_url, 'duration': 0}), 200
 
 
+@app.route('/api/voice/reminder', methods=['POST'])
+def voice_reminder():
+    """分析语音转文字结果，提取待办提醒"""
+    data = request.json
+    text = (data.get('text') or '').strip()
+    user_id = data.get('user_id')
+    group_id = data.get('group_id')
+    if not text or not user_id:
+        return jsonify({'reminder': None}), 200
+    _check_voice_reminder(text, user_id, group_id)
+    return jsonify({'reminder': True}), 200
+
+
 @app.route('/api/upload_image', methods=['POST'])
 def upload_image():
     """上传图片，返回可访问的 URL"""
@@ -338,6 +1021,7 @@ def register():
     user.set_password(password)
     db.session.add(user)
     db.session.commit()
+    _auto_add_ai_friend(user.id)
     
     return jsonify({'message': '注册成功', 'user_id': user.id, 'username': user.username}), 201
 
@@ -355,6 +1039,9 @@ def login():
     
     if not user or not user.check_password(password):
         return jsonify({'error': '用户名或密码错误'}), 401
+    
+    # 自动添加 AI 好友（现有用户登录时）
+    _auto_add_ai_friend(user.id)
     
     return jsonify({
         'message': '登录成功',
@@ -1138,6 +1825,12 @@ def handle_disconnect():
     logger.warning('[SOCKET] Client disconnected — IP=%s reason=%s', client_ip, reason)
 
 
+@socketio.on('heartbeat')
+def handle_heartbeat(data):
+    """响应客户端心跳，保持连接活跃"""
+    pass  # 只需响应即可保活
+
+
 # 捕获 SocketIO 连接错误
 @socketio.on_error()
 def handle_socket_error(e):
@@ -1213,6 +1906,14 @@ def handle_send_message(data):
         
         message_data['is_mine'] = True
         emit('receive_message', message_data, room=str(sender_id))
+        
+        # ===== DeepSeek AI 私聊拦截 =====
+        ai_user = User.query.filter_by(username=AI_USER_USERNAME).first()
+        if ai_user and receiver_id == ai_user.id:
+            from threading import Thread
+            Thread(target=_handle_ai_private_chat, args=(
+                sender_id, content, message.id
+            ), daemon=True).start()
         
     except Exception as e:
         logger.error(f'Sending message failed: {e}')
@@ -1355,6 +2056,19 @@ def handle_send_group_message(data):
         mention_ids = []
         if content:
             mention_ids = re.findall(r'@(\d+)', content)
+
+        # ---- @AI 拦截：智能问答 ----
+        is_ai_question = content and '@ai' in content.lower() and msg_type == 'text'
+        if is_ai_question:
+            # 去掉 @AI 前缀，提取问题
+            question = re.sub(r'@\S+\s*', '', content, count=1).strip()
+            if not question:
+                question = content
+            # 用后台线程处理 AI 回答，不阻塞主事件循环
+            from threading import Thread
+            Thread(target=_handle_ai_group_question, args=(
+                group_id, sender_id, question
+            ), daemon=True).start()
 
         message = GroupMessage(
             group_id=group_id,
@@ -1655,12 +2369,21 @@ def init_database():
                     db.create_all()  # 补建表中不存在的模型
         except Exception as e:
             logger.error('[DB] Database init error: %s', e)
+        
+        # 确保 DeepSeek AI 用户存在
+        try:
+            _get_ai_user()
+        except Exception as e:
+            logger.error('[DB] Failed to create AI user: %s', e)
 
 
 # 启动时初始化数据库（支持 Gunicorn 和直接运行两种方式）
 init_database()
 
 if __name__ == '__main__':
+    # 启动 AI 每日摘要后台定时器
+    _start_summary_scheduler()
+    
     port = int(os.environ.get('PORT', 8080))
     
     logger.info('=' * 50)

@@ -13,10 +13,9 @@
 </head>
 <body>
     <div id="app">
-        <div class="offline-banner" id="offline-banner">⚠️ 网络已断开，正在尝试重连...</div>
         <div id="login-container">
             <div class="auth-box">
-                <img src="/static/app-logo.png" alt="家庭聊天" class="app-logo">
+                <img src="/static/app-logo.jpg" alt="家庭聊天" class="app-logo">
                 <div class="version-badge">v2.1.0</div>
                 <div id="login-form">
                     <input type="text" id="login-username" placeholder="👤 用户名">
@@ -52,13 +51,12 @@
                         <div class="user-details">
                             <div class="user-name" id="current-user"></div>
                             <div class="user-status">
-                                <span id="connection-status" style="font-size: 12px;"></span>
-                            </div>
+                                </div>
                         </div>
                     </div>
                     <div style="display: flex; gap: 8px;">
                         <button onclick="toggleSeniorMode()" class="logout-btn" style="font-size: 14px;" title="长辈模式">👴</button>
-                        <button onclick="testNotification()" class="logout-btn" style="font-size: 14px;" title="测试通知">🔔</button>
+                        <button onclick="togglePushNotifications()" class="logout-btn" style="font-size: 14px;" title="开启推送通知">🔔</button>
                         <button onclick="exportChat()" class="logout-btn" style="font-size: 14px;" title="导出聊天记录">💾</button>
                         <button onclick="logout()" class="logout-btn">🚪</button>
                     </div>
@@ -122,7 +120,7 @@
             
             <div class="chat-area">
                 <div id="no-chat-selected">
-                    <img src="/static/empty-state.png" alt="选择好友" class="empty-state-img">
+                    <img src="/static/empty-state.jpg" alt="选择好友" class="empty-state-img">
                     <p>选择一个好友开始聊天</p>
                 </div>
                 <div id="chat-window" style="display: none;">
@@ -277,7 +275,7 @@
     <!-- ===== 通话界面 ===== -->
     <div id="call-overlay">
         <div id="incoming-call">
-            <img src="/static/call-avatar.png" class="call-avatar-img" id="caller-avatar">
+            <img src="/static/call-avatar.jpg" class="call-avatar-img" id="caller-avatar">
             <div class="caller-name" id="caller-name">正在呼叫...</div>
             <div class="call-type-label" id="call-type-label">📹 视频通话</div>
             <div class="incoming-buttons">
@@ -432,7 +430,63 @@
             setupPermissionRequests();
             checkApkAvailability();
             setupVoiceRecordButton();
+            setupKeepAlive();
         });
+
+        // ===== Android 后台保活 + 可见性重连 =====
+        function setupKeepAlive() {
+            // 尝试获取 Android WakeLock（APK 中有效）
+            try {
+                if (navigator.wakeLock && navigator.wakeLock.request) {
+                    var wakeLock = null;
+                    async function requestWakeLock() {
+                        try {
+                            wakeLock = await navigator.wakeLock.request('screen');
+                            console.log('✅ WakeLock 已获取，屏幕不会休眠');
+                            wakeLock.addEventListener('release', function() {
+                                console.log('WakeLock 已释放，将在10秒后重新获取');
+                                setTimeout(requestWakeLock, 10000);
+                            });
+                        } catch (e) {
+                            console.log('WakeLock 获取失败（非APK环境）:', e);
+                        }
+                    }
+                    requestWakeLock();
+                }
+            } catch (e) {
+                console.log('WakeLock 不可用:', e);
+            }
+
+            // 页面可见性变化时重连
+            document.addEventListener('visibilitychange', function() {
+                if (!document.hidden && socket && !socket.connected) {
+                    console.log('📱 用户回到前台，正在重连...');
+                    socket.connect();
+                    // 同时刷新好友和消息
+                    setTimeout(function() {
+                        loadFriends();
+                        if (currentFriendId) loadMessages(currentFriendId);
+                    }, 2000);
+                }
+            });
+
+            // Android WebView 专用：监听在线状态变化
+            window.addEventListener('online', function() {
+                console.log('📱 网络恢复，重连中...');
+                if (socket && !socket.connected) {
+                    socket.connect();
+                }
+                loadFriends();
+            });
+            window.addEventListener('offline', function() {
+                console.log('📱 网络断开，进入离线模式');
+            });
+
+            // 定期保活：通过 /api/stats 请求保持 HTTP 连接活跃
+            setInterval(function() {
+                fetch('/api/stats', { cache: 'no-store' }).catch(function() {});
+            }, 60000);  // 每分钟一次
+        }
 
         // 检测是否运行在原生Android应用内（通过AndroidBridge判断）
         function isAndroidApp() {

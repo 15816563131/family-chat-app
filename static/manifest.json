@@ -1,18 +1,52 @@
 {
-  "name": "家庭聊天",
+  "name": "家庭聊天 - Family Chat",
   "short_name": "家庭聊天",
-  "description": "家庭聊天 v2.0 - 支持语音消息、视频通话、语音通话",
+  "description": "家庭聊天 - 支持文字消息、语音、图片、群聊和待办事项",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "background_color": "#ededed",
   "theme_color": "#07c160",
   "orientation": "portrait-primary",
+  "categories": ["social", "communication", "family"],
+  "lang": "zh-CN",
+  "dir": "ltr",
+  "prefer_related_applications": false,
   "icons": [
     {
-      "src": "/static/app-logo.png",
-      "sizes": "2048x2048",
-      "type": "image/png"
+      "src": "/static/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/static/icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/static/app-logo.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
+      "purpose": "any"
     }
   ],
-  "categories": ["social", "communication"]
+  "screenshots": [],
+  "shortcuts": [
+    {
+      "name": "好友列表",
+      "short_name": "好友",
+      "description": "查看并搜索好友",
+      "url": "/#friends",
+      "icons": [{ "src": "/static/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "群聊",
+      "short_name": "群聊",
+      "description": "查看我的群聊",
+      "url": "/#groups",
+      "icons": [{ "src": "/static/icon-192.png", "sizes": "192x192" }]
+    }
+  ]
 }
