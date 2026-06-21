@@ -552,11 +552,11 @@ def _get_ai_user():
     if not ai:
         ai = User(username=AI_USER_USERNAME)
         ai.set_password('ai_internal_' + uuid.uuid4().hex[:12])
-        ai.bio = '🤖 我是 DeepSeek AI 助手，可以回答你的任何问题~'
+        ai.bio = '🤖 我是 AI 助手，可以回答你的任何问题~'
         ai.avatar = '/static/icon-192.png'
         db.session.add(ai)
         db.session.commit()
-        logger.info('[AI] DeepSeek AI 用户已创建 (id=%d)', ai.id)
+        logger.info('[AI] AI 用户已创建 (id=%d)', ai.id)
     return ai
 
 def _auto_add_ai_friend(user_id):

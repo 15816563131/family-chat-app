@@ -1,32 +1,30 @@
 """
 FamilyChat AI 配置
+
+Ollama 模式（默认）：
+  APK 内嵌时 Flask 和 Ollama 都在手机本地运行
+  WebView → localhost Flask → localhost Ollama
+  完全离线，无需网络
+
+远程 API 模式（备选）：
+  设置 OLLAMA_DISABLE=1 并配置 OPENAI_API_KEY 即可
 """
 import os
 from datetime import time
 
-# ===== AI 模型配置 =====
-# 兼容 OpenAI API 的提供商均可使用（DeepSeek、OpenAI、智谱等）
+# Ollama 默认地址（APK 内嵌时 localhost 不变）
+OLLAMA_BASE_URL = os.environ.get('OLLAMA_BASE_URL', 'http://localhost:11434')
+OLLAMA_MODEL = os.environ.get('OLLAMA_MODEL', 'qwen2.5:7b')
+
+# 远程 API（仅备选 — 需设置 OLLAMA_DISABLE=1 才启用）
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
 OPENAI_BASE_URL = os.environ.get('OPENAI_BASE_URL', 'https://api.deepseek.com/v1')
 AI_MODEL = os.environ.get('AI_MODEL', 'deepseek-chat')
 
-# ===== 本地 Ollama 配置（完全免费，无需 API Key） =====
-# 安装 Ollama: https://ollama.com
-# 下载模型: ollama pull qwen2.5:7b （或 deepseek-r1:7b, llama3.1:8b 等）
-# 设置后 AI 功能自动使用本地模型，无需任何费用
-OLLAMA_BASE_URL = os.environ.get('OLLAMA_BASE_URL', 'http://localhost:11434')
-OLLAMA_MODEL = os.environ.get('OLLAMA_MODEL', 'qwen2.5:7b')
-
 # ===== 费用控制 =====
-# 每个群每天最多生成 1 次摘要
-DAILY_AI_LIMIT = 1
-
-# ===== 摘要配置 =====
-# 每天早上 8:00 生成摘要
+DAILY_AI_LIMIT = 1           # 每个群每天最多 1 次摘要
 SUMMARY_SCHEDULE_TIME = time(8, 0)
-# 摘要窗口：最近 24 小时
 SUMMARY_WINDOW_HOURS = 24
-# 摘要最大字数
 SUMMARY_MAX_CHARS = 100
 SUMMARY_LANGUAGE = 'zh-CN'
 
@@ -76,6 +74,5 @@ def load_env():
                 key, value = line.split('=', 1)
                 key = key.strip()
                 value = value.strip()
-                # 只设置环境变量（不覆盖已存在的）
                 if key not in os.environ:
                     os.environ[key] = value

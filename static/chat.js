@@ -2354,11 +2354,13 @@ function initChat() {
 
     // ===== DeepSeek AI 私聊流式回答（打字机效果） =====
     socket.on('ai_private_message', (data) => {
-        var userId = data.user_id;
         var content = data.content || '';
         var done = data.done || false;
+        var fullContent = data.full_content || '';
 
         var aiIndicator = document.getElementById('ai-private-typing');
+        
+        // 首次：创建打字机指示器
         if (!aiIndicator && !done) {
             var messagesContainer = document.querySelector('#chat-window .messages-container');
             if (!messagesContainer) return;
@@ -2370,6 +2372,7 @@ function initChat() {
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
         }
 
+        // 打字中：追加内容
         if (aiIndicator && !done) {
             var textEl = aiIndicator.querySelector('.ai-typing-text');
             if (textEl) {
@@ -2379,8 +2382,22 @@ function initChat() {
             }
         }
 
-        if (done && aiIndicator) {
-            aiIndicator.remove();
+        // 完成：移除指示器，将完整内容作为正式消息显示
+        if (done) {
+            if (aiIndicator) aiIndicator.remove();
+            if (fullContent) {
+                // 将 AI 回复作为正式消息显示在聊天窗口中
+                var container = document.querySelector('#chat-window .messages-container');
+                if (container) {
+                    var msgDiv = document.createElement('div');
+                    msgDiv.className = 'message received';
+                    msgDiv.innerHTML = '<div class="message-content">' + 
+                        escapeHtml(fullContent) + 
+                        '</div>';
+                    container.appendChild(msgDiv);
+                    container.scrollTop = container.scrollHeight;
+                }
+            }
         }
     });
     
