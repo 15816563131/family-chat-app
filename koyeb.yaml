@@ -1,0 +1,28 @@
+# ===== FamilyChat Koyeb 部署配置 =====
+# 连接 GitHub 仓库后自动部署
+# 登录 https://app.koyeb.com → Create App → Deploy from GitHub → 选择本仓库
+name: family-chat
+
+services:
+  - name: web
+    type: web
+    dockerfile: Dockerfile
+    port: 8080
+    env:
+      - key: DATABASE_URL
+        value: "sqlite:////data/family_chat.db"
+      - key: UPLOAD_FOLDER
+        value: "/data/uploads"
+      - key: SECRET_KEY
+        # 首次部署后在 Koyeb Dashboard 设置此 Secret
+        # Settings → Environment Variables → Add Secret
+        secret: CHAT_SECRET_KEY
+    routes:
+      - path: /
+    volumes:
+      - name: familychat-data
+        path: /data
+        size: 1Gi
+    scaling:
+      min: 1
+      max: 1

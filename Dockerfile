@@ -1,9 +1,9 @@
-# ===== FamilyChat Fly.io 部署镜像 =====
+# ===== FamilyChat 通用部署镜像（支持 Koyeb / Fly.io / Render）=====
 FROM python:3.12-slim
 
 WORKDIR /app
 
-# 安装系统依赖（psycopg2 编译需要，但这里用 SQLite 就先装轻量工具）
+# 安装系统依赖
 RUN apt-get update && \
     apt-get install -y --no-install-recommends gcc && \
     rm -rf /var/lib/apt/lists/*
@@ -16,16 +16,15 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # 复制项目代码
 COPY . .
 
-# 确保数据目录存在（用于 Fly.io 持久化挂载）
+# 确保数据目录存在
 RUN mkdir -p /data /app/static/uploads
 
-# 使用非 root 用户运行（安全性更好）
+# 使用非 root 用户运行
 RUN useradd -m -u 1000 appuser && \
     chown -R appuser:appuser /app /data
 USER appuser
 
-# Fly.io 默认端口
 EXPOSE 8080
 
-# 启动命令（Gunicorn + Eventlet 支持 WebSocket）
-CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:8080", "-k", "eventlet", "-w", "1", "--timeout", "120"]
+# 使用 PORT 环境变量（Koyeb 自动注入），默认 8080
+CMD gunicorn app:app --bind 0.0.0.0:${PORT:-8080} -k eventlet -w 1 --timeout 120
