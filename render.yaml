@@ -4,7 +4,7 @@ services:
     name: family-chat
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT -k eventlet -w 1
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT -w 1 --timeout 120
     envVars:
       - key: DATABASE_URL
         fromDatabase:

@@ -49,7 +49,7 @@ logging.getLogger('engineio').setLevel(logging.WARNING)
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 CORS(app, supports_credentials=True)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 
