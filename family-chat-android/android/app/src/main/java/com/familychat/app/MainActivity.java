@@ -42,7 +42,8 @@ import androidx.core.content.ContextCompat;
 public class MainActivity extends Activity {
 
     private static final String TAG = "FamilyChat";
-    private static final String WEB_URL = "https://family-chat-app-production-93b6.up.railway.app";
+    // Zeabur 部署后会自动分配域名，替换为你的实际地址
+    private static final String WEB_URL = "https://family-chat-xxxxxxx.zeabur.app";
     private static final int POST_NOTIFICATIONS_REQUEST_CODE = 1002;
     private static final int SMS_PERMISSION_REQUEST_CODE = 1003;
     private static final int BATTERY_OPTIMIZATION_REQUEST_CODE = 1004;
@@ -270,16 +271,18 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         Log.d(TAG, "=== onResume ===");
-        // 关键：不调用 webView.onResume()，保持 JS 持续运行
+        FamilyChatApp.isAppForeground = true;
+        FamilyChatApp.lastForegroundTime = System.currentTimeMillis();
+
         if (webView != null) {
             try {
                 webView.resumeTimers();
+                webView.onResume();
             } catch (Exception e) {
                 Log.w(TAG, "resumeTimers error", e);
             }
         }
         ensureForegroundServiceRunning();
-        // 重新获取锁
         if (wakeLock != null && !wakeLock.isHeld()) {
             try { wakeLock.acquire(); } catch (Exception e) {}
         }
@@ -292,10 +295,14 @@ public class MainActivity extends Activity {
     protected void onPause() {
         super.onPause();
         Log.d(TAG, "=== onPause ===");
-        // 关键：不调用 webView.onPause()，JavaScript 继续运行
-        // 保持 WebSocket 连接不断开
-        // 保持定时器运行
-        // 只退到后台，不销毁 Activity
+        // 不标记后台（可能是系统弹窗导致的pause）
+        // 等 onStop 再标记
+
+        // 释放前台 WakeLock，让 CPU 可以休眠
+        if (wakeLock != null && wakeLock.isHeld()) {
+            try { wakeLock.release(); } catch (Exception e) {}
+        }
+
         ensureForegroundServiceRunning();
     }
 
@@ -303,12 +310,35 @@ public class MainActivity extends Activity {
     protected void onStart() {
         super.onStart();
         Log.d(TAG, "=== onStart ===");
+        FamilyChatApp.isAppForeground = true;
+        FamilyChatApp.lastForegroundTime = System.currentTimeMillis();
+
+        // 通知前端：回到前台
+        if (webView != null) {
+            webView.evaluateJavascript(
+                "if(window.notifyAppForeground)window.notifyAppForeground();", null);
+        }
     }
 
     @Override
     protected void onStop() {
         super.onStop();
         Log.d(TAG, "=== onStop ===");
+        FamilyChatApp.isAppForeground = false;
+
+        // 通知前端：进入后台
+        if (webView != null) {
+            webView.evaluateJavascript(
+                "if(window.notifyAppBackground)window.notifyAppBackground();", null);
+        }
+
+        // 释放锁，让 CPU 休眠
+        if (wakeLock != null && wakeLock.isHeld()) {
+            try { wakeLock.release(); } catch (Exception e) {}
+        }
+        if (wifiLock != null && wifiLock.isHeld()) {
+            try { wifiLock.release(); } catch (Exception e) {}
+        }
     }
 
     @Override
@@ -582,6 +612,19 @@ public class MainActivity extends Activity {
             String logs = FamilyChatApp.getRecentCrashLogs(MainActivity.this);
             Log.d(TAG, "getCrashLogs called, length=" + logs.length());
             return logs;
+        }
+
+        @JavascriptInterface
+        public void notifyBackground() {
+            Log.d(TAG, "JS notifyBackground called");
+            FamilyChatApp.isAppForeground = false;
+        }
+
+        @JavascriptInterface
+        public void notifyForeground() {
+            Log.d(TAG, "JS notifyForeground called");
+            FamilyChatApp.isAppForeground = true;
+            FamilyChatApp.lastForegroundTime = System.currentTimeMillis();
         }
     }
 

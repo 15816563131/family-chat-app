@@ -29,6 +29,79 @@ let todoSectionVisible = true;
 let speechRecognition = null;
 let isSpeechRecording = false;
 
+// ===== 前后台状态管理 =====
+let isAppInForeground = true;
+let heartbeatTimer = null;
+let backgroundPollTimer = null;
+
+function disconnectSocketForBackground() {
+    if (socket && socket.connected) {
+        console.log('🔌 进入后台，断开 SocketIO 连接');
+        socket.disconnect();
+        isConnected = false;
+    }
+    if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+    }
+    startBackgroundPolling();
+}
+
+function reconnectSocketForForeground() {
+    if (!socket) {
+        initSocketIO();
+        return;
+    }
+    if (!socket.connected) {
+        console.log('🔄 回到前台，重连 SocketIO');
+        socket.connect();
+        isConnected = true;
+    }
+    stopBackgroundPolling();
+    startHeartbeat();
+}
+
+function startBackgroundPolling() {
+    if (backgroundPollTimer) return;
+    console.log('⏱️ 启动后台轮询（低频）');
+    backgroundPollTimer = setInterval(async () => {
+        if (!currentUser || !currentUser.id) return;
+        try {
+            const resp = await fetch('/api/recent_messages/' + currentUser.id + 
+                '?since=' + (lastMessageCheckTime || 0));
+            if (resp.ok) {
+                const messages = await resp.json();
+                if (messages.length > 0) {
+                    console.log('📬 后台拉取到 ' + messages.length + ' 条消息');
+                    messages.forEach(msg => {
+                        handleReceivedMessage(msg);
+                    });
+                    lastMessageCheckTime = Date.now();
+                }
+            }
+        } catch (e) {
+            // 静默失败
+        }
+    }, 60000); // 后台 60 秒轮询一次
+}
+
+function stopBackgroundPolling() {
+    if (backgroundPollTimer) {
+        clearInterval(backgroundPollTimer);
+        backgroundPollTimer = null;
+        console.log('⏹️ 停止后台轮询');
+    }
+}
+
+function startHeartbeat() {
+    if (heartbeatTimer) return;
+    heartbeatTimer = setInterval(() => {
+        if (socket && socket.connected) {
+            socket.emit('heartbeat', { ts: Date.now() });
+        }
+    }, 15000);
+}
+
 // ===== 语音状态提示（带显示/隐藏，修复：添加 active 类使元素可见） =====
 function showVoiceStatus(text) {
     var el = document.getElementById('voice-status');
@@ -2271,11 +2344,7 @@ function initChat() {
     });
     
     // ===== 保活机制：定期发送心跳保持连接 =====
-    setInterval(() => {
-        if (socket && socket.connected) {
-            socket.emit('heartbeat', { ts: Date.now() });
-        }
-    }, 15000);  // 每15秒发送一次心跳
+    startHeartbeat();
     
     socket.on('connect', () => {
         console.log('✅ 已连接到服务器');
@@ -2481,6 +2550,27 @@ function initChat() {
             showSyncStatus('正在尝试建立连接...', true);
         }
     }, 5000);
+    
+    // ===== 前后台状态监听 =====
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+            isAppInForeground = false;
+            disconnectSocketForBackground();
+        } else {
+            isAppInForeground = true;
+            reconnectSocketForForeground();
+        }
+    });
+    
+    // 接收 Android 原生通知
+    window.notifyAppBackground = function() {
+        isAppInForeground = false;
+        disconnectSocketForBackground();
+    };
+    window.notifyAppForeground = function() {
+        isAppInForeground = true;
+        reconnectSocketForForeground();
+    };
 }
 
 // ===================================================================

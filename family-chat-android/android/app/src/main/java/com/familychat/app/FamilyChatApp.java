@@ -37,6 +37,9 @@ public class FamilyChatApp extends Application {
     public static volatile Object sharedWebViewLock = new Object();
     public static volatile boolean webViewLoaded = false;
     public static volatile MessagePollService pollService = null;
+    public static volatile boolean isAppForeground = false;
+    public static volatile long lastForegroundTime = 0;
+    public static volatile long lastMessageTime = 0;
 
     @Override
     public void onCreate() {

@@ -14,9 +14,7 @@ import android.content.SharedPreferences;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 import android.os.Build;
-import android.os.Handler;
 import android.os.IBinder;
-import android.os.Looper;
 import android.os.PowerManager;
 import android.os.SystemClock;
 import android.util.Log;
@@ -43,15 +41,13 @@ public class ForegroundService extends Service {
     public static final String ACTION_TRIGGER_POLL = "com.familychat.app.ACTION_TRIGGER_POLL";
     public static final String ACTION_KEEP_ALIVE = "com.familychat.app.ACTION_KEEP_ALIVE";
 
-    private static final long POLL_INTERVAL_MS = 15000;      // 正常轮询：15 秒
-    private static final long DOZE_POLL_INTERVAL_MS = 60000; // Doze 模式下：1 分钟（系统允许的窗口）
     private static final int ALARM_POLL_REQUEST_CODE = 5501;
     private static final int ALARM_RESTART_REQUEST_CODE = 5502;
     private static final int NOTIFICATION_ID = 1;
     private static final String CHANNEL_ID = "family_chat_service";
     private static final String MSG_CHANNEL_ID = "family_chat_messages";
 
-    private PowerManager.WakeLock wakeLock;
+    private PowerManager.WakeLock pollWakeLock;
     private BroadcastReceiver connectivityReceiver;
     private BroadcastReceiver screenReceiver;
     private boolean isInDoze = false;
@@ -61,7 +57,7 @@ public class ForegroundService extends Service {
         super.onCreate();
         Log.d(TAG, "ForegroundService created");
         createNotificationChannels();
-        acquireWakeLock();
+        initWakeLock();
         registerReceivers();
         scheduleAlarms();
     }
@@ -90,20 +86,36 @@ public class ForegroundService extends Service {
         }
     }
 
-    private void acquireWakeLock() {
+    private void initWakeLock() {
         try {
             PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
             if (pm != null) {
-                wakeLock = pm.newWakeLock(
-                        PowerManager.PARTIAL_WAKE_LOCK, "FamilyChat:ServiceWakeLock");
-                wakeLock.setReferenceCounted(false);
-                if (!wakeLock.isHeld()) {
-                    wakeLock.acquire();
-                    Log.d(TAG, "WakeLock acquired");
-                }
+                pollWakeLock = pm.newWakeLock(
+                        PowerManager.PARTIAL_WAKE_LOCK, "FamilyChat:PollWakeLock");
+                pollWakeLock.setReferenceCounted(false);
             }
         } catch (Exception e) {
-            Log.e(TAG, "WakeLock error: " + e.getMessage());
+            Log.e(TAG, "initWakeLock error: " + e.getMessage());
+        }
+    }
+
+    private void acquirePollWakeLock() {
+        try {
+            if (pollWakeLock != null && !pollWakeLock.isHeld()) {
+                pollWakeLock.acquire(30000);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "acquirePollWakeLock error: " + e.getMessage());
+        }
+    }
+
+    private void releasePollWakeLock() {
+        try {
+            if (pollWakeLock != null && pollWakeLock.isHeld()) {
+                pollWakeLock.release();
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "releasePollWakeLock error: " + e.getMessage());
         }
     }
 
@@ -114,7 +126,10 @@ public class ForegroundService extends Service {
                 @Override
                 public void onReceive(Context context, Intent intent) {
                     Log.d(TAG, "Connectivity changed, triggering poll");
+                    FamilyChatApp.isAppForeground = true;
+                    FamilyChatApp.lastForegroundTime = System.currentTimeMillis();
                     triggerPollIfPossible();
+                    scheduleAlarms();
                 }
             };
             registerReceiver(connectivityReceiver, connFilter);
@@ -134,6 +149,8 @@ public class ForegroundService extends Service {
                         Log.d(TAG, "Screen off - switching to doze-compatible polling");
                     } else if (Intent.ACTION_SCREEN_ON.equals(intent.getAction())) {
                         isInDoze = false;
+                        FamilyChatApp.isAppForeground = true;
+                        FamilyChatApp.lastForegroundTime = System.currentTimeMillis();
                         triggerPollIfPossible();
                     }
                     scheduleAlarms();
@@ -145,12 +162,31 @@ public class ForegroundService extends Service {
         }
     }
 
+    private long getSmartPollInterval() {
+        long now = System.currentTimeMillis();
+
+        if (FamilyChatApp.isAppForeground) {
+            return 5000;
+        }
+
+        long timeSinceForeground = now - FamilyChatApp.lastForegroundTime;
+
+        if (isInDoze || timeSinceForeground > 300000) {
+            return 300000;
+        }
+
+        if (timeSinceForeground > 60000) {
+            return 60000;
+        }
+
+        return 30000;
+    }
+
     private void scheduleAlarms() {
         try {
             AlarmManager am = (AlarmManager) getSystemService(ALARM_SERVICE);
             if (am == null) return;
 
-            // 1. 轮询闹钟
             Intent pollIntent = new Intent(RestartReceiver.ACTION_POLL);
             pollIntent.setPackage(getPackageName());
             PendingIntent pollPi;
@@ -162,7 +198,7 @@ public class ForegroundService extends Service {
                         PendingIntent.FLAG_UPDATE_CURRENT);
             }
 
-            long interval = isInDoze ? DOZE_POLL_INTERVAL_MS : POLL_INTERVAL_MS;
+            long interval = getSmartPollInterval();
             long triggerAt = SystemClock.elapsedRealtime() + interval;
 
             am.cancel(pollPi);
@@ -171,9 +207,8 @@ public class ForegroundService extends Service {
             } else {
                 am.setRepeating(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, interval, pollPi);
             }
-            Log.d(TAG, "Alarm scheduled at " + triggerAt + " interval=" + interval);
+            Log.d(TAG, "Alarm scheduled interval=" + interval + "ms (foreground=" + FamilyChatApp.isAppForeground + ")");
 
-            // 2. 服务自重启闹钟（后备）
             Intent restartIntent = new Intent(RestartReceiver.ACTION_RESTART_SERVICE);
             restartIntent.setPackage(getPackageName());
             PendingIntent restartPi;
@@ -196,18 +231,15 @@ public class ForegroundService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         Log.d(TAG, "ForegroundService onStartCommand, action=" + (intent != null ? intent.getAction() : "null"));
 
-        // 启动前台通知
         startForeground(NOTIFICATION_ID, buildServiceNotification());
 
-        // 如果收到轮询触发，则立即执行一次轮询
         if (intent != null && ACTION_TRIGGER_POLL.equals(intent.getAction())) {
+            acquirePollWakeLock();
             triggerPollIfPossible();
-            // 重新调度下一次轮询
             scheduleAlarms();
         } else if (intent != null && ACTION_KEEP_ALIVE.equals(intent.getAction())) {
-            // 保持服务存活的心跳信号
         } else {
-            // 正常启动：第一次也来一轮
+            acquirePollWakeLock();
             triggerPollIfPossible();
         }
 
@@ -225,8 +257,8 @@ public class ForegroundService extends Service {
 
             NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
                     .setSmallIcon(android.R.drawable.ic_dialog_email)
-                    .setContentTitle("FamilyChat 运行中")
-                    .setContentText("保持在线以接收新消息")
+                    .setContentTitle("FamilyChat 在线")
+                    .setContentText("后台运行中，自动接收新消息")
                     .setOngoing(true)
                     .setPriority(NotificationCompat.PRIORITY_LOW)
                     .setContentIntent(pendingIntent)
@@ -236,7 +268,6 @@ public class ForegroundService extends Service {
             return builder.build();
         } catch (Exception e) {
             Log.e(TAG, "buildServiceNotification failed: " + e.getMessage());
-            // 返回一个最基础的 Notification 防止崩溃
             return new Notification();
         }
     }
@@ -246,6 +277,7 @@ public class ForegroundService extends Service {
         final int userId = prefs.getInt(KEY_USER_ID, -1);
         if (userId <= 0) {
             Log.d(TAG, "No user ID - will retry later");
+            releasePollWakeLock();
             return;
         }
 
@@ -253,6 +285,7 @@ public class ForegroundService extends Service {
             @Override
             public void run() {
                 pollForMessages(userId);
+                releasePollWakeLock();
             }
         }).start();
     }
@@ -261,6 +294,11 @@ public class ForegroundService extends Service {
         SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
         long lastCheck = prefs.getLong(KEY_LAST_CHECK, 0);
         long currentTime = System.currentTimeMillis();
+
+        if (!isNetworkAvailable()) {
+            Log.d(TAG, "No network - skipping poll");
+            return;
+        }
 
         HttpURLConnection conn = null;
         try {
@@ -325,6 +363,17 @@ public class ForegroundService extends Service {
         }
     }
 
+    private boolean isNetworkAvailable() {
+        try {
+            ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+            if (cm == null) return false;
+            NetworkInfo activeNetwork = cm.getActiveNetworkInfo();
+            return activeNetwork != null && activeNetwork.isConnectedOrConnecting();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     private void showMessageNotification(String senderName, String content, int msgId) {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -355,6 +404,7 @@ public class ForegroundService extends Service {
                     .setContentIntent(pendingIntent)
                     .setAutoCancel(true)
                     .setDefaults(NotificationCompat.DEFAULT_ALL)
+                    .setTimeoutAfter(10000)
                     .build();
 
             NotificationManagerCompat nm = NotificationManagerCompat.from(this);
@@ -395,11 +445,7 @@ public class ForegroundService extends Service {
     @Override
     public void onDestroy() {
         Log.w(TAG, "ForegroundService onDestroy - will restart");
-        try {
-            if (wakeLock != null && wakeLock.isHeld()) {
-                wakeLock.release();
-            }
-        } catch (Exception e) {}
+        releasePollWakeLock();
         try {
             if (connectivityReceiver != null) unregisterReceiver(connectivityReceiver);
         } catch (Exception e) {}
@@ -407,7 +453,6 @@ public class ForegroundService extends Service {
             if (screenReceiver != null) unregisterReceiver(screenReceiver);
         } catch (Exception e) {}
 
-        // 尝试自动重启
         try {
             Intent restartIntent = new Intent(this, ForegroundService.class);
             restartIntent.setPackage(getPackageName());
