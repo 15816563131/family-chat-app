@@ -2408,43 +2408,41 @@ def backup_command():
 
 
 def init_database():
-    """使用 Flask-Migrate 管理 schema 版本，自动创建/升级数据库"""
-    with app.app_context():
-        try:
-            from sqlalchemy import inspect
-            inspector = inspect(db.engine)
-            if not inspector.has_table('user'):
-                db.create_all()
-                logger.info('[DB] Initial database created with all tables')
-            else:
-                try:
-                    from flask_migrate import upgrade
-                    upgrade(directory='migrations')
-                    logger.info('[DB] Migration upgrade completed')
-                except Exception as migrate_err:
-                    logger.info('[DB] No migration directory found, using models as-is: %s', migrate_err)
+    """使用 Flask-Migrate 管理 schema 版本，自动创建/升级数据库（后台线程执行）"""
+    def _init():
+        with app.app_context():
+            try:
+                from sqlalchemy import inspect
+                inspector = inspect(db.engine)
+                if not inspector.has_table('user'):
                     db.create_all()
-        except Exception as e:
-            logger.error('[DB] Database init error: %s', e)
-        
-        try:
-            _get_ai_user()
-        except Exception as e:
-            logger.error('[DB] Failed to create AI user: %s', e)
+                    logger.info('[DB] Initial database created with all tables')
+                else:
+                    try:
+                        from flask_migrate import upgrade
+                        upgrade(directory='migrations')
+                        logger.info('[DB] Migration upgrade completed')
+                    except Exception as migrate_err:
+                        logger.info('[DB] No migration directory found, using models as-is: %s', migrate_err)
+                        db.create_all()
+            except Exception as e:
+                logger.error('[DB] Database init error: %s', e)
+            
+            try:
+                _get_ai_user()
+            except Exception as e:
+                logger.error('[DB] Failed to create AI user: %s', e)
+    
+    import threading
+    thread = threading.Thread(target=_init, daemon=True)
+    thread.start()
 
 @app.route('/api/health')
 def health_check():
     """健康检查端点"""
-    try:
-        db.session.execute(db.text('SELECT 1'))
-        return jsonify({'status': 'ok', 'database': 'connected'})
-    except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+    return jsonify({'status': 'ok', 'app': 'family-chat', 'time': datetime.now().isoformat()})
 
-try:
-    init_database()
-except Exception as e:
-    logger.error('[DB] Fatal database init error: %s', e)
+init_database()
 
 if __name__ == '__main__':
     # 启动 AI 每日摘要后台定时器
