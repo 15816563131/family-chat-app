@@ -49,7 +49,7 @@ logging.getLogger('engineio').setLevel(logging.WARNING)
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 CORS(app, supports_credentials=True)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 
@@ -2408,37 +2408,50 @@ def backup_command():
 
 
 def init_database():
-    """使用 Flask-Migrate 管理 schema 版本，自动创建/升级数据库"""
+    """使用 Flask-Migrate 管理 schema 版本，自动创建/升级数据库（带超时和重试）"""
     with app.app_context():
-        try:
-            # 首次部署自动创建所有表（无 migration 目录时）
-            from sqlalchemy import inspect
-            inspector = inspect(db.engine)
-            if not inspector.has_table('user'):
-                db.create_all()
-                logger.info('[DB] Initial database created with all tables')
-            else:
-                # 已有旧表：尝试执行未应用的 migration（如果有 migration 目录）
-                try:
-                    from flask_migrate import upgrade
-                    upgrade(directory='migrations')
-                    logger.info('[DB] Migration upgrade completed')
-                except Exception as migrate_err:
-                    # 无 migration 目录时不阻塞启动
-                    logger.info('[DB] No migration directory found, using models as-is: %s', migrate_err)
-                    db.create_all()  # 补建表中不存在的模型
-        except Exception as e:
-            logger.error('[DB] Database init error: %s', e)
+        import eventlet
+        for attempt in range(3):
+            try:
+                with eventlet.Timeout(15, False):
+                    from sqlalchemy import inspect
+                    inspector = inspect(db.engine)
+                    if not inspector.has_table('user'):
+                        db.create_all()
+                        logger.info('[DB] Initial database created with all tables')
+                    else:
+                        try:
+                            from flask_migrate import upgrade
+                            upgrade(directory='migrations')
+                            logger.info('[DB] Migration upgrade completed')
+                        except Exception as migrate_err:
+                            logger.info('[DB] No migration directory found, using models as-is: %s', migrate_err)
+                            db.create_all()
+                    
+                    _get_ai_user()
+                    return
+            except Exception as e:
+                logger.warning('[DB] Database init attempt %d failed: %s', attempt + 1, e)
+                eventlet.sleep(3)
         
-        # 确保 DeepSeek AI 用户存在
-        try:
-            _get_ai_user()
-        except Exception as e:
-            logger.error('[DB] Failed to create AI user: %s', e)
+        logger.error('[DB] All database init attempts failed')
 
+@app.route('/api/health')
+def health_check():
+    """健康检查端点"""
+    try:
+        with app.app_context():
+            from sqlalchemy import text
+            db.session.execute(text('SELECT 1'))
+        return jsonify({'status': 'ok', 'database': 'connected'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 # 启动时初始化数据库（支持 Gunicorn 和直接运行两种方式）
-init_database()
+try:
+    init_database()
+except Exception as e:
+    logger.error('[DB] Fatal database init error: %s', e)
 
 if __name__ == '__main__':
     # 启动 AI 每日摘要后台定时器

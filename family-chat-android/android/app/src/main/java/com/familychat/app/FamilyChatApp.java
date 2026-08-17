@@ -28,7 +28,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class FamilyChatApp extends Application {
 
-    public static final String WEB_URL = "https://family-chat-app-production-93b6.up.railway.app";
+    public static final String WEB_URL = "https://family-chat.onrender.com";
     public static final String TAG = "FamilyChat";
     public static final String PREFS_NAME = "FamilyChatPrefs";
     public static final String KEY_USER_ID = "userId";

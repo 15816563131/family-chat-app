@@ -36,7 +36,7 @@ public class ForegroundService extends Service {
     private static final String KEY_USER_ID = "userId";
     private static final String KEY_LAST_CHECK = "lastCheck";
     private static final String KEY_KNOWN_MSG_PREFIX = "known_msg_";
-    private static final String SERVER_URL = "https://family-chat-app-production-93b6.up.railway.app";
+    private static final String SERVER_URL = "https://family-chat.onrender.com";
 
     public static final String ACTION_TRIGGER_POLL = "com.familychat.app.ACTION_TRIGGER_POLL";
     public static final String ACTION_KEEP_ALIVE = "com.familychat.app.ACTION_KEEP_ALIVE";

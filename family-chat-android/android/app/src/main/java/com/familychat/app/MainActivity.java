@@ -43,7 +43,7 @@ public class MainActivity extends Activity {
 
     private static final String TAG = "FamilyChat";
     // Zeabur 部署后会自动分配域名，替换为你的实际地址
-    private static final String WEB_URL = "https://family-chat-xxxxxxx.zeabur.app";
+    private static final String WEB_URL = "https://family-chat.onrender.com";
     private static final int POST_NOTIFICATIONS_REQUEST_CODE = 1002;
     private static final int SMS_PERMISSION_REQUEST_CODE = 1003;
     private static final int BATTERY_OPTIMIZATION_REQUEST_CODE = 1004;

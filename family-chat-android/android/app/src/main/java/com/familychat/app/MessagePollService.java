@@ -26,7 +26,7 @@ public class MessagePollService {
     private static final String KEY_USER_ID = "userId";
     private static final String KEY_LAST_CHECK = "lastCheck";
     private static final String KEY_KNOWN_MSG_PREFIX = "known_msg_";
-    private static final String SERVER_URL = "https://family-chat-app-production-93b6.up.railway.app";
+    private static final String SERVER_URL = "https://family-chat.onrender.com";
     private static final long POLL_INTERVAL_MS = 10000;
     private static final long RETRY_INTERVAL_MS = 3000;
     private static final int MAX_CONSECUTIVE_FAILURES = 3;
