@@ -2408,46 +2408,39 @@ def backup_command():
 
 
 def init_database():
-    """使用 Flask-Migrate 管理 schema 版本，自动创建/升级数据库（带超时和重试）"""
+    """使用 Flask-Migrate 管理 schema 版本，自动创建/升级数据库"""
     with app.app_context():
-        import eventlet
-        for attempt in range(3):
-            try:
-                with eventlet.Timeout(15, False):
-                    from sqlalchemy import inspect
-                    inspector = inspect(db.engine)
-                    if not inspector.has_table('user'):
-                        db.create_all()
-                        logger.info('[DB] Initial database created with all tables')
-                    else:
-                        try:
-                            from flask_migrate import upgrade
-                            upgrade(directory='migrations')
-                            logger.info('[DB] Migration upgrade completed')
-                        except Exception as migrate_err:
-                            logger.info('[DB] No migration directory found, using models as-is: %s', migrate_err)
-                            db.create_all()
-                    
-                    _get_ai_user()
-                    return
-            except Exception as e:
-                logger.warning('[DB] Database init attempt %d failed: %s', attempt + 1, e)
-                eventlet.sleep(3)
+        try:
+            from sqlalchemy import inspect
+            inspector = inspect(db.engine)
+            if not inspector.has_table('user'):
+                db.create_all()
+                logger.info('[DB] Initial database created with all tables')
+            else:
+                try:
+                    from flask_migrate import upgrade
+                    upgrade(directory='migrations')
+                    logger.info('[DB] Migration upgrade completed')
+                except Exception as migrate_err:
+                    logger.info('[DB] No migration directory found, using models as-is: %s', migrate_err)
+                    db.create_all()
+        except Exception as e:
+            logger.error('[DB] Database init error: %s', e)
         
-        logger.error('[DB] All database init attempts failed')
+        try:
+            _get_ai_user()
+        except Exception as e:
+            logger.error('[DB] Failed to create AI user: %s', e)
 
 @app.route('/api/health')
 def health_check():
     """健康检查端点"""
     try:
-        with app.app_context():
-            from sqlalchemy import text
-            db.session.execute(text('SELECT 1'))
+        db.session.execute(db.text('SELECT 1'))
         return jsonify({'status': 'ok', 'database': 'connected'})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
-# 启动时初始化数据库（支持 Gunicorn 和直接运行两种方式）
 try:
     init_database()
 except Exception as e:
