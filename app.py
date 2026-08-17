@@ -22,11 +22,15 @@ load_env()
 
 app = Flask(__name__)  # 恢复默认静态文件处理
 
+# Hugging Face Spaces / 容器持久化存储
+DATA_DIR = os.environ.get('DATA_DIR', '/data')
+os.makedirs(DATA_DIR, exist_ok=True)
+
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'family-chat-secret-key-2024')
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///family_chat.db').replace('postgres://', 'postgresql://')
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', f'sqlite:///{DATA_DIR}/family_chat.db').replace('postgres://', 'postgresql://')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'pool_pre_ping': True, 'pool_recycle': 300}
-app.config['UPLOAD_FOLDER'] = os.environ.get('UPLOAD_FOLDER', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'uploads'))
+app.config['UPLOAD_FOLDER'] = os.environ.get('UPLOAD_FOLDER', os.path.join(DATA_DIR, 'uploads'))
 app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024  # 20MB (支持语音文件)
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 60 * 60 * 24 * 7  # 静态文件默认缓存7天
 

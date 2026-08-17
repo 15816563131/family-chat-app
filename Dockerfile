@@ -1,4 +1,4 @@
-# ===== FamilyChat 通用部署镜像（支持 Zeabur / Hugging Face / 任意 Docker 平台）=====
+# ===== FamilyChat Docker 镜像（支持 Hugging Face Spaces / Render / 通用）=====
 FROM python:3.12-slim
 
 WORKDIR /app
@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # 复制项目代码
 COPY . .
 
-# 确保数据目录存在
+# Hugging Face Spaces 持久化存储路径
 RUN mkdir -p /data /app/static/uploads
 
 # 使用非 root 用户运行
@@ -26,5 +26,5 @@ USER appuser
 
 EXPOSE 8080
 
-# 使用 PORT 环境变量（Koyeb 自动注入），默认 8080
-CMD gunicorn app:app --bind 0.0.0.0:${PORT:-8080} -k eventlet -w 1 --timeout 120
+# Hugging Face Spaces 自动注入 PORT 环境变量
+CMD ["sh", "-c", "gunicorn app:app --bind 0.0.0.0:${PORT:-8080} -k eventlet -w 1 --timeout 120"]
