@@ -1,5 +1,6 @@
 # ===== FamilyChat Fly.io 配置 =====
-app = "family-chat"
+# 首次部署：运行 deploy-to-fly.ps1 即可
+app = "family-chat-app"
 
 [build]
   dockerfile = "Dockerfile"
