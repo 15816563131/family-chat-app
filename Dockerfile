@@ -1,4 +1,4 @@
-# ===== FamilyChat 通用部署镜像（支持 Koyeb / Fly.io / Render）=====
+# ===== FamilyChat 通用部署镜像（支持 Zeabur / Hugging Face / 任意 Docker 平台）=====
 FROM python:3.12-slim
 
 WORKDIR /app

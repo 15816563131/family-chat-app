@@ -1,0 +1,23 @@
+{
+  "name": "family-chat",
+  "region": "southeast-asia",
+  "services": [
+    {
+      "name": "web",
+      "type": "docker",
+      "dockerfile": "Dockerfile",
+      "port": 8080,
+      "env": {
+        "DATABASE_URL": "sqlite:////data/family_chat.db",
+        "UPLOAD_FOLDER": "/data/uploads"
+      },
+      "volumes": [
+        {
+          "name": "familychat-data",
+          "mountPath": "/data",
+          "sizeGi": 1
+        }
+      ]
+    }
+  ]
+}
