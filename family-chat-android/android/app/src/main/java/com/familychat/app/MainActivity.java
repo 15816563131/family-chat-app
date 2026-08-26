@@ -42,8 +42,8 @@ import androidx.core.content.ContextCompat;
 public class MainActivity extends Activity {
 
     private static final String TAG = "FamilyChat";
-    // Zeabur 部署后会自动分配域名，替换为你的实际地址
-    private static final String WEB_URL = "https://family-chat.onrender.com";
+    // 直接加载 APK 内置的免服务器 PWA（assets/index.html）
+    private static final String WEB_URL = "file:///android_asset/index.html";
     private static final int POST_NOTIFICATIONS_REQUEST_CODE = 1002;
     private static final int SMS_PERMISSION_REQUEST_CODE = 1003;
     private static final int BATTERY_OPTIMIZATION_REQUEST_CODE = 1004;
@@ -113,6 +113,9 @@ public class MainActivity extends Activity {
 
         // 启动 WebView 保活机制
         startKeepAlive();
+
+        // 自动续期PythonAnywhere
+        RenewHelper.checkAndRenew(this);
 
         // 启动前台服务
         ensureForegroundServiceRunning();
@@ -530,6 +533,36 @@ public class MainActivity extends Activity {
             }
             if (pollService != null) {
                 pollService.setUserId(userId);
+            }
+        }
+
+        @JavascriptInterface
+        public void setRoom(String room) {
+            if (room == null || room.isEmpty()) return;
+            try {
+                SharedPreferences prefs = appContext.getSharedPreferences("FamilyChatPrefs", MODE_PRIVATE);
+                prefs.edit().putString("room", room).apply();
+                Log.d(TAG, "room saved to SharedPreferences: " + room);
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to save room: " + e.getMessage());
+            }
+            if (pollService != null) {
+                pollService.setRoom(room);
+            }
+        }
+
+        @JavascriptInterface
+        public void setUid(String uid) {
+            if (uid == null || uid.isEmpty()) return;
+            try {
+                SharedPreferences prefs = appContext.getSharedPreferences("FamilyChatPrefs", MODE_PRIVATE);
+                prefs.edit().putString("uid", uid).apply();
+                Log.d(TAG, "uid saved to SharedPreferences: " + uid);
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to save uid: " + e.getMessage());
+            }
+            if (pollService != null) {
+                pollService.setUid(uid);
             }
         }
 

@@ -111,7 +111,7 @@ if ($PushToGit) {
         git add static/family-chat.apk
         git add build-apk.ps1
         
-        $CommitMessage = "Build: 更新APK v2.0.0 ($((Get-Date).ToString("yyyy-MM-dd HH:mm:ss")))"
+        $CommitMessage = "Build: 更新APK v2.0.0 $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
         git commit -m $CommitMessage
         
         Write-Host ""

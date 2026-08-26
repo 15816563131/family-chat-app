@@ -12,6 +12,17 @@
     <meta name="apple-mobile-web-app-title" content="家庭聊天">
 </head>
 <body>
+    <div id="app-loading-overlay">
+        <div class="loading-content">
+            <img src="/static/app-logo.jpg" alt="家庭聊天" class="loading-logo">
+            <h2 class="loading-title">家庭聊天</h2>
+            <p class="loading-slogan">让家人更亲近</p>
+            <div class="loading-progress-bar">
+                <div class="loading-progress-fill" id="loadingProgressFill"></div>
+            </div>
+            <p class="loading-text" id="loadingText">正在初始化...</p>
+        </div>
+    </div>
     <div id="app">
         <div id="login-container">
             <div class="auth-box">
@@ -238,6 +249,13 @@
                     <label>新密码（不修改请留空）</label>
                     <input type="password" id="profile-password" placeholder="新密码">
                 </div>
+                <div class="profile-field apk-download-section" id="profile-apk-section">
+                    <label>📱 下载安卓客户端</label>
+                    <button class="save-btn" onclick="downloadApk()">下载 APK 安装包</button>
+                    <p class="apk-info" style="font-size: 12px; color: #999; margin-top: 5px;">
+                        安装后可后台常驻运行，实时接收消息
+                    </p>
+                </div>
                 <button class="save-btn" onclick="saveProfile()">💾 保存修改</button>
             </div>
         </div>
@@ -295,7 +313,13 @@
         </div>
     </div>
 
-    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script>
+        // 在PythonAnywhere等不支持WebSocket的平台上强制使用SSE
+        window.__force_sse = true;
+        window.__socketio_failed = true;
+    </script>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js" onerror="window.__socketio_failed=true"></script>
+    <script src="/static/sse-client.js"></script>
     <script src="/static/chat.js"></script>
     <script src="/static/embed-chat.js" data-title="AI 助手" data-primary="#667eea" data-greeting="你好！我是 AI 助手，有什么可以帮你的吗？" data-position="right"></script>
     <script>
@@ -502,6 +526,8 @@
             if (isAndroidApp()) {
                 var apkSection = document.getElementById('apk-section');
                 if (apkSection) apkSection.style.display = 'none';
+                var profileApkSection = document.getElementById('profile-apk-section');
+                if (profileApkSection) profileApkSection.style.display = 'none';
                 console.log('Android应用内：隐藏APK下载区域');
                 return;
             }

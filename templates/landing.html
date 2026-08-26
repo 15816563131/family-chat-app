@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>家庭聊天 - 专属家庭的即时通讯APP</title>
+    <link rel="stylesheet" href="/static/landing.css">
+    <meta name="theme-color" content="#07c160">
+    <link rel="icon" href="/static/app-logo.jpg" type="image/jpeg">
+</head>
+<body>
+    <div class="landing-container">
+        <div class="hero-section">
+            <div class="hero-content">
+                <div class="app-logo-wrap">
+                    <img src="/static/app-logo.jpg" alt="家庭聊天" class="app-logo-large">
+                </div>
+                <h1 class="app-title">家庭聊天</h1>
+                <p class="app-subtitle">专属家庭的即时通讯 · 后台常驻 · 实时消息</p>
+                <div class="download-section">
+                    <button class="download-btn primary" onclick="downloadApk()">
+                        <span class="btn-icon">📱</span>
+                        <span class="btn-text">
+                            <span class="btn-title">下载安卓版</span>
+                            <span class="btn-subtitle" id="apk-size-info">正在获取安装包信息...</span>
+                        </span>
+                    </button>
+                </div>
+                <div class="trust-badges">
+                    <div class="badge">
+                        <span class="badge-icon">🔒</span>
+                        <span class="badge-text">安全可靠</span>
+                    </div>
+                    <div class="badge">
+                        <span class="badge-icon">⚡</span>
+                        <span class="badge-text">实时推送</span>
+                    </div>
+                    <div class="badge">
+                        <span class="badge-icon">💚</span>
+                        <span class="badge-text">永久免费</span>
+                    </div>
+                </div>
+            </div>
+            <div class="phone-mockup">
+                <div class="phone-frame">
+                    <div class="phone-screen">
+                        <div class="chat-preview">
+                            <div class="preview-header">
+                                <div class="preview-avatar">👨</div>
+                                <div class="preview-name">爸爸</div>
+                            </div>
+                            <div class="preview-messages">
+                                <div class="msg-bubble left">今天晚饭吃什么？</div>
+                                <div class="msg-bubble right">红烧肉怎么样？</div>
+                                <div class="msg-bubble left">好啊，我去买菜</div>
+                                <div class="msg-bubble right">👍 路上注意安全</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="features-section">
+            <h2 class="section-title">为什么选择家庭聊天？</h2>
+            <p class="section-desc">专为家庭场景设计，让家人之间的沟通更简单、更温暖</p>
+            <div class="features-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">🏠</div>
+                    <h3>专属家庭空间</h3>
+                    <p>独立的家人通讯录，只有家庭成员，没有工作群打扰</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🔔</div>
+                    <h3>后台实时推送</h3>
+                    <p>APP后台常驻运行，家人消息第一时间收到，不错过重要信息</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🎤</div>
+                    <h3>语音消息</h3>
+                    <p>支持语音消息，长辈也能轻松使用，说话比打字更方便</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">👥</div>
+                    <h3>家庭群聊</h3>
+                    <p>创建家庭群，一家人一起聊天，分享生活点滴</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">📋</div>
+                    <h3>共享清单</h3>
+                    <p>群内共享待办清单，买菜清单、家务分工一目了然</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🔒</div>
+                    <h3>隐私安全</h3>
+                    <p>数据独立存储，只有家人能看到，保护您的隐私安全</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="testimonials-section">
+            <h2 class="section-title">用户怎么说</h2>
+            <p class="section-desc">来自真实用户的使用体验</p>
+            <div class="testimonials-grid">
+                <div class="testimonial-card">
+                    <div class="testimonial-avatar">👩</div>
+                    <div class="testimonial-content">
+                        <p>"爸妈不会用微信的复杂功能，这个APP简单多了，他们一学就会。现在每天都能收到妈妈的语音消息，感觉就在身边一样。"</p>
+                    </div>
+                    <div class="testimonial-author">
+                        <strong>李女士</strong>
+                        <span>在外工作的女儿</span>
+                    </div>
+                </div>
+                <div class="testimonial-card">
+                    <div class="testimonial-avatar">👨</div>
+                    <div class="testimonial-content">
+                        <p>"以前买菜总忘记买什么，现在用群里的共享清单，老婆加什么我都能看到，再也不会漏买了。全家人都在用，很方便！"</p>
+                    </div>
+                    <div class="testimonial-author">
+                        <strong>王先生</strong>
+                        <span>两个孩子的爸爸</span>
+                    </div>
+                </div>
+                <div class="testimonial-card">
+                    <div class="testimonial-avatar">👵</div>
+                    <div class="testimonial-content">
+                        <p>"我眼神不好，打字慢，这个能发语音，按住说话就行。孙子孙女发的消息我都能及时收到，还能听语音，太好了！"</p>
+                    </div>
+                    <div class="testimonial-author">
+                        <strong>张奶奶</strong>
+                        <span>68岁，退休教师</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="cta-section">
+            <div class="cta-content">
+                <h2>立即下载，和家人开始聊天</h2>
+                <p>完全免费，无广告，安全可靠</p>
+                <button class="download-btn large" onclick="downloadApk()">
+                    <span class="btn-icon">📥</span>
+                    <span class="btn-text">
+                        <span class="btn-title">立即下载家庭聊天</span>
+                        <span class="btn-subtitle">安卓版 · 约5MB · 安全无毒</span>
+                    </span>
+                </button>
+            </div>
+        </div>
+
+        <footer class="footer">
+            <p>© 2026 家庭聊天 · 让家人更亲近</p>
+        </footer>
+    </div>
+
+    <script>
+        function isAndroidApp() {
+            try {
+                return typeof window.AndroidBridge !== 'undefined' && window.AndroidBridge !== null;
+            } catch (e) {
+                return false;
+            }
+        }
+
+        function loadApkInfo() {
+            try {
+                fetch('/api/apk/info', { cache: 'no-store' })
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                        if (data && data.available) {
+                            var info = 'v' + (data.version || '') + ' · ' + (data.size_mb || '') + 'MB';
+                            document.getElementById('apk-size-info').textContent = info;
+                        } else {
+                            document.getElementById('apk-size-info').textContent = data.message || '安装包准备中...';
+                        }
+                    })
+                    .catch(function(e) {
+                        document.getElementById('apk-size-info').textContent = '点击下载';
+                    });
+            } catch (e) {
+                document.getElementById('apk-size-info').textContent = '点击下载';
+            }
+        }
+
+        function downloadApk() {
+            try {
+                var link = document.createElement('a');
+                link.href = '/api/apk/download';
+                link.download = 'family-chat.apk';
+                link.target = '_blank';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            } catch (e) {
+                window.location.href = '/api/apk/download';
+            }
+        }
+
+        if (isAndroidApp()) {
+            window.location.href = '/chat';
+        } else {
+            loadApkInfo();
+        }
+    </script>
+</body>
+</html>

@@ -36,16 +36,18 @@ public class ForegroundService extends Service {
     private static final String KEY_USER_ID = "userId";
     private static final String KEY_LAST_CHECK = "lastCheck";
     private static final String KEY_KNOWN_MSG_PREFIX = "known_msg_";
-    private static final String SERVER_URL = "https://family-chat.onrender.com";
+    private static final String SERVER_URL = "https://15816563131.pythonanywhere.com";
 
     public static final String ACTION_TRIGGER_POLL = "com.familychat.app.ACTION_TRIGGER_POLL";
     public static final String ACTION_KEEP_ALIVE = "com.familychat.app.ACTION_KEEP_ALIVE";
 
     private static final int ALARM_POLL_REQUEST_CODE = 5501;
     private static final int ALARM_RESTART_REQUEST_CODE = 5502;
+    private static final int ALARM_RENEW_REQUEST_CODE = 5503;
     private static final int NOTIFICATION_ID = 1;
     private static final String CHANNEL_ID = "family_chat_service";
     private static final String MSG_CHANNEL_ID = "family_chat_messages";
+    private static final long RENEW_CHECK_INTERVAL_MS = 24L * 60 * 60 * 1000;
 
     private PowerManager.WakeLock pollWakeLock;
     private BroadcastReceiver connectivityReceiver;
@@ -59,6 +61,7 @@ public class ForegroundService extends Service {
         createNotificationChannels();
         initWakeLock();
         registerReceivers();
+        RenewHelper.checkAndRenew(this);
         scheduleAlarms();
     }
 
@@ -222,6 +225,21 @@ public class ForegroundService extends Service {
             am.cancel(restartPi);
             am.setInexactRepeating(AlarmManager.ELAPSED_REALTIME_WAKEUP,
                     SystemClock.elapsedRealtime() + 120000, 120000, restartPi);
+
+            Intent renewIntent = new Intent(RestartReceiver.ACTION_RENEW_CHECK);
+            renewIntent.setPackage(getPackageName());
+            PendingIntent renewPi;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                renewPi = PendingIntent.getBroadcast(this, ALARM_RENEW_REQUEST_CODE, renewIntent,
+                        PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+            } else {
+                renewPi = PendingIntent.getBroadcast(this, ALARM_RENEW_REQUEST_CODE, renewIntent,
+                        PendingIntent.FLAG_UPDATE_CURRENT);
+            }
+            am.cancel(renewPi);
+            am.setInexactRepeating(AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                    SystemClock.elapsedRealtime() + RENEW_CHECK_INTERVAL_MS, RENEW_CHECK_INTERVAL_MS, renewPi);
+            Log.d(TAG, "Renew alarm scheduled every " + (RENEW_CHECK_INTERVAL_MS / 3600000) + " hours");
         } catch (Exception e) {
             Log.e(TAG, "scheduleAlarms failed: " + e.getMessage());
         }

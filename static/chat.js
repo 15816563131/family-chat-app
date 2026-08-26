@@ -261,7 +261,21 @@ function createSpeechRecognition() {
     recog.maxAlternatives = 1;
     
     recog.onresult = function(event) {
+        if (!event.results || !event.results[0] || !event.results[0][0]) {
+            hideVoiceStatus();
+            isSpeechRecording = false;
+            var btn = document.getElementById('voice-input-btn');
+            if (btn) btn.textContent = '🎤';
+            return;
+        }
         var transcript = event.results[0][0].transcript;
+        if (!transcript) {
+            hideVoiceStatus();
+            isSpeechRecording = false;
+            var btn2 = document.getElementById('voice-input-btn');
+            if (btn2) btn2.textContent = '🎤';
+            return;
+        }
         var input = document.getElementById('message-input');
         if (input) input.value = input.value + transcript;
         hideVoiceStatus();
@@ -496,7 +510,7 @@ async function sendVoiceMessage(audioBlob, duration) {
         });
         
         var data = await response.json();
-        if (response.ok && data.url) {
+        if (response.ok && data && data.url) {
             if (socket && isConnected) {
                 socket.emit('send_message', {
                     sender_id: currentUser.id,
@@ -1017,15 +1031,20 @@ async function register() {
         return;
     }
     
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+    
     try {
         const response = await fetch('/api/register', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ username, password })
+            body: JSON.stringify({ username, password }),
+            signal: controller.signal
         });
         
+        clearTimeout(timeoutId);
         const data = await response.json();
         
         if (response.ok) {
@@ -1040,35 +1059,50 @@ async function register() {
             hideLoading();
         }
     } catch (error) {
-        showMessage('网络错误，请重试');
+        clearTimeout(timeoutId);
         hideLoading();
+        if (error.name === 'AbortError') {
+            showMessage('请求超时，请检查网络后重试');
+        } else {
+            showMessage('网络错误，请重试');
+        }
         console.error('注册错误:', error);
     }
 }
 
 async function login() {
-    showLoading();
     const username = document.getElementById('login-username').value.trim();
     const password = document.getElementById('login-password').value;
     
     if (!username || !password) {
         showMessage('请输入用户名和密码');
-        hideLoading();
         return;
     }
     
+    showLoadingOverlay();
+    setLoadingProgress(10, '正在登录...');
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+    
     try {
+        setLoadingProgress(30, '正在验证账号...');
+        
         const response = await fetch('/api/login', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ username, password })
+            body: JSON.stringify({ username, password }),
+            signal: controller.signal
         });
         
+        clearTimeout(timeoutId);
         const data = await response.json();
         
         if (response.ok) {
+            setLoadingProgress(60, '登录成功，正在加载...');
+            
             currentUser = {
                 id: data.user_id,
                 username: data.username
@@ -1093,14 +1127,18 @@ async function login() {
             }
             
             initChat();
-            hideLoading();
         } else {
+            hideLoadingOverlay();
             showMessage(data.error || '登录失败');
-            hideLoading();
         }
     } catch (error) {
-        showMessage('网络错误，请重试');
-        hideLoading();
+        clearTimeout(timeoutId);
+        hideLoadingOverlay();
+        if (error.name === 'AbortError') {
+            showMessage('请求超时，请检查网络后重试');
+        } else {
+            showMessage('网络错误，请重试');
+        }
         console.error('登录错误:', error);
     }
 }
@@ -2315,88 +2353,338 @@ function initVoiceButton() {
 }
 
 // ===== 初始化聊天 =====
-function initChat() {
+// ===== 加载进度管理 =====
+let loadingProgress = 0;
+
+function setLoadingProgress(percent, text) {
+    var overlay = document.getElementById('app-loading-overlay');
+    if (!overlay) return;
+    
+    var progressFill = document.getElementById('loadingProgressFill');
+    var loadingText = document.getElementById('loadingText');
+    
+    if (progressFill) {
+        progressFill.style.width = percent + '%';
+    }
+    if (loadingText && text) {
+        loadingText.textContent = text;
+    }
+    loadingProgress = percent;
+}
+
+function hideLoadingOverlay() {
+    var overlay = document.getElementById('app-loading-overlay');
+    if (!overlay) return;
+    overlay.classList.add('fade-out');
+    setTimeout(function() {
+        if (overlay.parentNode) {
+            overlay.parentNode.removeChild(overlay);
+        }
+    }, 600);
+}
+
+function showLoadingOverlay() {
+    var overlay = document.getElementById('app-loading-overlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'app-loading-overlay';
+        overlay.innerHTML = '\
+            <div class="loading-content">\
+                <img src="/static/app-logo.jpg" alt="家庭聊天" class="loading-logo">\
+                <h2 class="loading-title">家庭聊天</h2>\
+                <p class="loading-slogan">让家人更亲近</p>\
+                <div class="loading-progress-bar">\
+                    <div class="loading-progress-fill" id="loadingProgressFill"></div>\
+                </div>\
+                <p class="loading-text" id="loadingText">正在加载...</p>\
+            </div>\
+        ';
+        document.body.insertBefore(overlay, document.body.firstChild);
+    } else {
+        overlay.classList.remove('fade-out');
+        overlay.style.pointerEvents = 'auto';
+    }
+}
+
+async function initChat() {
+    showLoadingOverlay();
+    setLoadingProgress(5, '正在准备界面...');
+    
     document.getElementById('login-container').style.display = 'none';
     document.getElementById('chat-container').style.display = 'flex';
-    document.getElementById('current-user').textContent = `欢迎, ${currentUser.username}`;
+    document.getElementById('current-user').textContent = '欢迎, ' + currentUser.username;
     
-    // 从服务器加载用户信息（包括头像）
-    fetch('/api/user/' + currentUser.id)
-        .then(function(r) { return r.json(); })
-        .then(function(user) {
-            if (user && user.avatar) {
-                updateUserAvatar(user.avatar);
-            } else {
-                updateUserAvatar();
-            }
-        })
-        .catch(function() {
+    handleResize();
+    
+    setLoadingProgress(15, '正在加载用户信息...');
+    
+    try {
+        var userResp = await fetch('/api/user/' + currentUser.id);
+        var user = await userResp.json();
+        if (user && user.avatar) {
+            updateUserAvatar(user.avatar);
+        } else {
             updateUserAvatar();
+        }
+    } catch (e) {
+        updateUserAvatar();
+    }
+    
+    setLoadingProgress(30, '正在连接服务器...');
+    
+    var connectPromise = new Promise(function(resolve) {
+        var resolved = false;
+        var checkInterval = null;
+        
+        function finish(result) {
+            if (resolved) return;
+            resolved = true;
+            if (checkInterval) {
+                clearInterval(checkInterval);
+                checkInterval = null;
+            }
+            resolve(result);
+        }
+        
+        function checkConnect() {
+            if (isConnected) {
+                finish(true);
+            }
+        }
+        
+        checkInterval = setInterval(checkConnect, 500);
+        
+        setTimeout(function() {
+            finish(false);
+        }, 15000);
+    });
+    
+    initTransport();
+    
+    var connected = await connectPromise;
+    
+    if (connected) {
+        setLoadingProgress(55, '服务器已连接');
+    } else {
+        setLoadingProgress(55, '正在同步数据...');
+    }
+    
+    setLoadingProgress(60, '正在加载好友列表...');
+    
+    try {
+        await loadFriends();
+    } catch (e) {
+        console.log('加载好友失败:', e);
+    }
+    
+    setLoadingProgress(75, '正在加载请求...');
+    
+    try {
+        await loadFriendRequests();
+    } catch (e) {
+        console.log('加载好友请求失败:', e);
+    }
+    
+    setLoadingProgress(85, '正在加载群聊...');
+    
+    try {
+        if (typeof loadGroups === 'function') {
+            await loadGroups();
+        }
+    } catch (e) {
+        console.log('加载群聊失败:', e);
+    }
+    
+    setLoadingProgress(92, '正在准备功能...');
+    
+    loadStats();
+    setupMessageLongPress();
+    addImageButtons();
+    addLocationButton();
+    
+    if (isSeniorMode) {
+        document.documentElement.classList.add('senior-mode');
+    }
+    
+    registerServiceWorker();
+    
+    setLoadingProgress(98, '即将完成...');
+    
+    // 设置定时任务
+    setInterval(function() {
+        loadFriendRequests();
+        if (currentFriendId && isConnected) {
+            loadMessages(currentFriendId);
+        }
+    }, 30000);
+    
+    setInterval(function() {
+        if (!isConnected) {
+            showSyncStatus('正在尝试建立连接...', true);
+        }
+    }, 5000);
+    
+    document.addEventListener('visibilitychange', function() {
+        if (document.hidden) {
+            isAppInForeground = false;
+            disconnectSocketForBackground();
+        } else {
+            isAppInForeground = true;
+            reconnectSocketForForeground();
+        }
+    });
+    
+    window.notifyAppBackground = function() {
+        isAppInForeground = false;
+        disconnectSocketForBackground();
+    };
+    window.notifyAppForeground = function() {
+        isAppInForeground = true;
+        reconnectSocketForForeground();
+    };
+    
+    setLoadingProgress(100, '欢迎回来, ' + currentUser.username + '!');
+    
+    setTimeout(hideLoadingOverlay, 400);
+}
+
+// ===== 传输层：自动选择 SocketIO 或 SSE =====
+function initTransport() {
+    var useSSE = false;
+    
+    if (window.__force_sse || window.__socketio_failed || typeof io === 'undefined') {
+        console.log('🔌 使用 SSE 传输层');
+        useSSE = true;
+    }
+    
+    var token = localStorage.getItem('authToken') || '';
+    
+    if (useSSE) {
+        try {
+            socket = new SSEClient({
+                user_id: currentUser.id,
+                token: token,
+                baseURL: ''
+            });
+        } catch (e) {
+            console.error('SSE初始化失败:', e);
+            isConnected = false;
+            showSyncStatus('连接初始化失败，正在重试...', true);
+            setTimeout(initTransport, 3000);
+            return;
+        }
+        
+        socket.on('connect', function() {
+            console.log('✅ SSE 已连接');
+            isConnected = true;
+            if (currentUser && currentUser.id) {
+                socket.emit('join', { user_id: currentUser.id });
+            }
+            if (currentFriendId) {
+                loadMessages(currentFriendId);
+            }
+            loadFriends();
         });
-    
-    socket = io({
-        transports: ['polling'],  // 只用 polling，服务器 threading 模式不支持 WebSocket
-        reconnection: true,
-        reconnectionAttempts: Infinity,
-        reconnectionDelay: 1000,
-        reconnectionDelayMax: 5000,
-        timeout: 20000
-    });
-    
-    // ===== 保活机制：定期发送心跳保持连接 =====
-    startHeartbeat();
-    
-    socket.on('connect', () => {
-        console.log('✅ 已连接到服务器');
-        isConnected = true;
-        if (currentUser && currentUser.id) {
+        
+        socket.on('disconnect', function(reason) {
+            console.log('❌ SSE 断开:', reason);
+            isConnected = false;
+        });
+        
+        socket.on('reconnect', function() {
+            console.log('🔄 SSE 重连成功');
+            isConnected = true;
             socket.emit('join', { user_id: currentUser.id });
-        }
+            if (currentFriendId) {
+                loadMessages(currentFriendId);
+            }
+            loadFriends();
+        });
         
-        if (currentFriendId) {
-            loadMessages(currentFriendId);
-        }
-        loadFriends();
-    });
-    
-    socket.on('disconnect', (reason) => {
-        console.log('❌ 与服务器断开连接:', reason);
-        isConnected = false;
-    });
-    
-    socket.on('reconnect', (attemptNumber) => {
-        console.log('🔄 重连成功');
-        isConnected = true;
-        socket.emit('join', { user_id: currentUser.id });
+        socket.on('reconnect_attempt', function(data) {
+            console.log('🔄 SSE 重连尝试:', data);
+        });
         
-        if (currentFriendId) {
-            loadMessages(currentFriendId);
-        }
-        loadFriends();
-    });
-    
-    socket.on('reconnect_attempt', (attemptNumber) => {
-        console.log(`🔄 正在尝试重连... (第${attemptNumber}次)`);
-    });
-    
-    socket.on('reconnect_error', (error) => {
-        console.log('❌ 重连失败:', error);
-    });
-    
-    socket.on('receive_message', (message) => {
+        socket.on('reconnect_error', function(error) {
+            console.log('❌ SSE 重连失败:', error);
+            isConnected = false;
+        });
+        
+        socket.on('connect_error', function(error) {
+            console.log('❌ SSE 连接错误:', error);
+            isConnected = false;
+        });
+        
+        _bindCommonEventListeners();
+    } else {
+        socket = io({
+            transports: ['polling'],
+            reconnection: true,
+            reconnectionAttempts: Infinity,
+            reconnectionDelay: 1000,
+            reconnectionDelayMax: 5000,
+            timeout: 20000
+        });
+        
+        startHeartbeat();
+        
+        socket.on('connect', function() {
+            console.log('✅ 已连接到服务器');
+            isConnected = true;
+            if (currentUser && currentUser.id) {
+                socket.emit('join', { user_id: currentUser.id });
+            }
+            if (currentFriendId) {
+                loadMessages(currentFriendId);
+            }
+            loadFriends();
+        });
+        
+        socket.on('disconnect', function(reason) {
+            console.log('❌ 与服务器断开连接:', reason);
+            isConnected = false;
+        });
+        
+        socket.on('reconnect', function(attemptNumber) {
+            console.log('🔄 重连成功');
+            isConnected = true;
+            socket.emit('join', { user_id: currentUser.id });
+            if (currentFriendId) {
+                loadMessages(currentFriendId);
+            }
+            loadFriends();
+        });
+        
+        socket.on('reconnect_attempt', function(attemptNumber) {
+            console.log('🔄 正在尝试重连... (第' + attemptNumber + '次)');
+        });
+        
+        socket.on('reconnect_error', function(error) {
+            console.log('❌ 重连失败:', error);
+        });
+        
+        socket.on('connect_error', function(error) {
+            console.log('❌ 连接错误:', error);
+            isConnected = false;
+        });
+        
+        _bindCommonEventListeners();
+    }
+}
+
+function _bindCommonEventListeners() {
+    socket.on('receive_message', function(message) {
         console.log('📨 收到消息:', message);
         handleReceivedMessage(message);
     });
 
-    // ===== AI 流式回答（打字机效果） =====
-    socket.on('ai_message', (data) => {
+    socket.on('ai_message', function(data) {
         var groupId = data.group_id;
         var content = data.content || '';
         var done = data.done || false;
 
         var aiIndicator = document.getElementById('ai-typing-' + groupId);
         if (!aiIndicator && !done) {
-            // 创建 AI 打字指示器
             var messagesContainer = document.querySelector('#group-chat-window .messages-container');
             if (!messagesContainer) return;
             aiIndicator = document.createElement('div');
@@ -2421,15 +2709,13 @@ function initChat() {
         }
     });
 
-    // ===== DeepSeek AI 私聊流式回答（打字机效果） =====
-    socket.on('ai_private_message', (data) => {
+    socket.on('ai_private_message', function(data) {
         var content = data.content || '';
         var done = data.done || false;
         var fullContent = data.full_content || '';
 
         var aiIndicator = document.getElementById('ai-private-typing');
         
-        // 首次：创建打字机指示器
         if (!aiIndicator && !done) {
             var messagesContainer = document.querySelector('#chat-window .messages-container');
             if (!messagesContainer) return;
@@ -2441,7 +2727,6 @@ function initChat() {
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
         }
 
-        // 打字中：追加内容
         if (aiIndicator && !done) {
             var textEl = aiIndicator.querySelector('.ai-typing-text');
             if (textEl) {
@@ -2451,11 +2736,9 @@ function initChat() {
             }
         }
 
-        // 完成：移除指示器，将完整内容作为正式消息显示
         if (done) {
             if (aiIndicator) aiIndicator.remove();
             if (fullContent) {
-                // 将 AI 回复作为正式消息显示在聊天窗口中
                 var container = document.querySelector('#chat-window .messages-container');
                 if (container) {
                     var msgDiv = document.createElement('div');
@@ -2470,19 +2753,11 @@ function initChat() {
         }
     });
     
-    socket.on('message_recalled', (data) => {
+    socket.on('message_recalled', function(data) {
         console.log('🔄 收到消息撤回:', data);
         handleMessageRecalled(data);
     });
     
-    socket.on('connect_error', (error) => {
-        console.log('❌ 连接错误:', error);
-        isConnected = false;
-        updateConnectionStatus('#FF5722', '● 连接错误');
-        showSyncStatus('连接错误，请检查网络', true);
-    });
-    
-    // ===== 输入状态提示 =====
     socket.on('user_typing', function(data) {
         if (data.user_id !== currentUser.id && currentGroupId === null && data.room === String(currentFriendId)) {
             var el = document.getElementById('friend-typing');
@@ -2499,7 +2774,6 @@ function initChat() {
                 el.style.display = 'block';
             }
         }
-        // Group typing
         if (data.room === 'group_' + currentGroupId && data.user_id !== currentUser.id) {
             var el = document.getElementById('group-typing');
             if (el) {
@@ -2518,59 +2792,19 @@ function initChat() {
         }
     });
     
-    initWebRTCSocketHandlers();
-    initVoiceButton();
-
-    handleResize();
+    socket.on('receive_group_message', function(message) {
+        console.log('📨 收到群消息:', message);
+        handleReceivedMessage(message);
+    });
     
-    loadFriends();
-    loadFriendRequests();
-    
-    // 加载新功能
-    loadStats();
-    setupMessageLongPress();
-    addImageButtons();
-    addLocationButton();
-    if (isSeniorMode) {
-        document.documentElement.classList.add('senior-mode');
-    }
-    
-    // 注册 Service Worker + 推送订阅
-    registerServiceWorker();
-    
-    setInterval(() => {
-        loadFriendRequests();
-        if (currentFriendId && isConnected) {
-            loadMessages(currentFriendId);
-        }
-    }, 30000);
-    
-    setInterval(() => {
-        if (!isConnected) {
-            showSyncStatus('正在尝试建立连接...', true);
-        }
-    }, 5000);
-    
-    // ===== 前后台状态监听 =====
-    document.addEventListener('visibilitychange', () => {
-        if (document.hidden) {
-            isAppInForeground = false;
-            disconnectSocketForBackground();
-        } else {
-            isAppInForeground = true;
-            reconnectSocketForForeground();
+    socket.on('message_failed', function(data) {
+        if (data.error) {
+            alert(data.error);
         }
     });
     
-    // 接收 Android 原生通知
-    window.notifyAppBackground = function() {
-        isAppInForeground = false;
-        disconnectSocketForBackground();
-    };
-    window.notifyAppForeground = function() {
-        isAppInForeground = true;
-        reconnectSocketForForeground();
-    };
+    initWebRTCSocketHandlers();
+    initVoiceButton();
 }
 
 // ===================================================================
@@ -3585,9 +3819,25 @@ function urlBase64ToUint8Array(base64String) {
 // 按钮重复问题已通过防重复 ID 机制解决，底部不再需要独立调用
 
 document.addEventListener('DOMContentLoaded', function() {
+    setLoadingProgress(10, '正在加载界面...');
+    
+    setTimeout(function() {
+        setLoadingProgress(30, '正在准备功能...');
+    }, 100);
+    
+    setTimeout(function() {
+        setLoadingProgress(50, '正在初始化...');
+    }, 200);
+    
+    setTimeout(function() {
+        setLoadingProgress(70, '检查登录状态...');
+    }, 300);
+    
     const savedUser = localStorage.getItem('currentUser');
     if (savedUser) {
         currentUser = JSON.parse(savedUser);
+        
+        setLoadingProgress(85, '自动登录中...');
         
         try {
             if (window.AndroidBridge && window.AndroidBridge.setUserId) {
@@ -3598,7 +3848,12 @@ document.addEventListener('DOMContentLoaded', function() {
             console.log('AndroidBridge not available:', e);
         }
         
-        initChat();
+        setTimeout(function() {
+            initChat();
+        }, 200);
+    } else {
+        setLoadingProgress(100, '准备就绪');
+        setTimeout(hideLoadingOverlay, 300);
     }
     
     document.getElementById('profile-modal').addEventListener('click', function(e) {

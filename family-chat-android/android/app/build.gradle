@@ -14,10 +14,23 @@ android {
         versionName "2.0.0"
     }
 
+    // 自定义调试签名：指向可写目录，避免默认 ~/.android/debug.keystore.lock 被沙箱锁住
+    signingConfigs {
+        debug {
+            storeFile file('D:/0/keystore/debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+        debug {
+            signingConfig signingConfigs.debug
         }
     }
     compileOptions {

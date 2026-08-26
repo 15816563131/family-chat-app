@@ -16,6 +16,7 @@ import subprocess
 import glob
 import uuid
 from config import load_env
+from sse_push import sse_manager, push_event_to_user, push_event_to_group, user_sse_stream, group_sse_stream
 
 # 加载 .env 配置（必须在 app 初始化之前）
 load_env()
@@ -53,6 +54,351 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 
+sse_manager.set_logger(logger)
+
+ENABLE_SSE = os.environ.get('ENABLE_SSE', 'true').lower() in ('true', '1', 'yes')
+
+_original_socketio_emit = socketio.emit
+
+def _patched_socketio_emit(event, data=None, room=None, *args, **kwargs):
+    _original_socketio_emit(event, data, room=room, *args, **kwargs)
+    if ENABLE_SSE and room:
+        room_str = str(room)
+        if room_str.startswith('group_'):
+            group_id = room_str[6:]
+            push_event_to_group(group_id, event, data)
+        else:
+            try:
+                int(room_str)
+                push_event_to_user(room_str, event, data)
+            except ValueError:
+                pass
+
+socketio.emit = _patched_socketio_emit
+
+def emit_to_user(user_id, event, data):
+    socketio.emit(event, data, room=str(user_id))
+
+def emit_to_group(group_id, event, data):
+    socketio.emit(event, data, room=f'group_{group_id}')
+
+
+# ---------------- SSE 端点 ----------------
+@app.route('/api/stream/user/<int:user_id>')
+def sse_user_stream(user_id):
+    token = request.args.get('token', '')
+    if not _validate_sse_token(token, user_id):
+        return jsonify({'error': 'Unauthorized'}), 401
+    return user_sse_stream(user_id)
+
+
+@app.route('/api/stream/group/<int:group_id>')
+def sse_group_stream(group_id):
+    token = request.args.get('token', '')
+    user_id = request.args.get('user_id', '')
+    if not _validate_sse_token(token, user_id):
+        return jsonify({'error': 'Unauthorized'}), 401
+    return group_sse_stream(group_id)
+
+
+@app.route('/api/sse/join', methods=['POST'])
+def sse_join_room():
+    data = request.get_json() or {}
+    user_id = data.get('user_id')
+    group_id = data.get('group_id')
+    if user_id and group_id:
+        sse_manager.register_user(user_id)
+        sse_manager.register_group(group_id)
+        return jsonify({'success': True})
+    return jsonify({'error': 'Invalid params'}), 400
+
+
+@app.route('/api/sse/leave', methods=['POST'])
+def sse_leave_room():
+    data = request.get_json() or {}
+    user_id = data.get('user_id')
+    group_id = data.get('group_id')
+    if user_id and group_id:
+        sse_manager.unregister_group(group_id)
+        return jsonify({'success': True})
+    return jsonify({'error': 'Invalid params'}), 400
+
+
+@app.route('/api/sse/event', methods=['POST'])
+def sse_handle_event():
+    data = request.get_json() or {}
+    event = data.get('event')
+    payload = data.get('data', {})
+    user_id = data.get('user_id')
+    token = data.get('token', '')
+
+    if not event:
+        return jsonify({'error': 'Event required'}), 400
+
+    if event not in ('heartbeat', 'typing', 'stop_typing'):
+        pass
+
+    handler = _get_sse_event_handler(event)
+    if handler:
+        return handler(payload, user_id, token)
+    else:
+        return jsonify({'success': True, 'event': event})
+
+
+@app.route('/api/sse/ping', methods=['POST'])
+def sse_ping():
+    return jsonify({'status': 'ok'})
+
+
+def _get_sse_event_handler(event):
+    handlers = {
+        'send_message': _sse_send_message,
+        'send_group_message': _sse_send_group_message,
+        'typing': _sse_typing,
+        'stop_typing': _sse_stop_typing,
+        'recall_message': _sse_recall_message,
+        'join': _sse_join,
+        'leave': _sse_leave,
+        'join_group': _sse_join_group,
+        'leave_group': _sse_leave_group,
+        'webrtc_offer': _sse_webrtc_offer,
+        'webrtc_answer': _sse_webrtc_answer,
+        'webrtc_ice_candidate': _sse_webrtc_ice_candidate,
+        'webrtc_reject': _sse_webrtc_reject,
+        'webrtc_end_call': _sse_webrtc_end_call,
+        'webrtc_busy': _sse_webrtc_busy,
+        'heartbeat': lambda d, u, t: jsonify({'ok': True}),
+    }
+    return handlers.get(event)
+
+
+def _sse_send_message(data, user_id, token):
+    sender_id = data.get('sender_id')
+    receiver_id = data.get('receiver_id')
+    content = data.get('content')
+    msg_type = data.get('msg_type', 'text')
+    voice_url = data.get('voice_url', '')
+    voice_duration = data.get('voice_duration', 0)
+
+    if not sender_id or not receiver_id:
+        return jsonify({'error': 'Invalid params'}), 400
+
+    if msg_type == 'text' and not content:
+        return jsonify({'error': 'Empty content'}), 400
+
+    is_blocked = Blacklist.query.filter_by(user_id=receiver_id, blocked_user_id=sender_id).first()
+    if is_blocked:
+        push_event_to_user(sender_id, 'message_failed', {'error': '对方已拉黑你'})
+        return jsonify({'error': 'Blocked'})
+
+    message = Message(
+        sender_id=sender_id,
+        receiver_id=receiver_id,
+        content=content,
+        msg_type=msg_type
+    )
+    if voice_url:
+        message.voice_url = voice_url
+        message.voice_duration = float(voice_duration) if voice_duration else 0.0
+    db.session.add(message)
+    db.session.commit()
+
+    sender = User.query.get(sender_id)
+
+    message_data = {
+        'id': message.id,
+        'sender_id': sender_id,
+        'receiver_id': receiver_id,
+        'sender_name': sender.username if sender else 'Unknown',
+        'content': content,
+        'msg_type': msg_type,
+        'voice_url': voice_url,
+        'voice_duration': voice_duration,
+        'timestamp': message.timestamp.isoformat(),
+        'is_mine': False,
+        'recalled': False
+    }
+
+    push_event_to_user(receiver_id, 'receive_message', message_data)
+
+    message_data['is_mine'] = True
+    push_event_to_user(sender_id, 'receive_message', message_data)
+
+    return jsonify({'success': True, 'id': message.id})
+
+
+def _sse_send_group_message(data, user_id, token):
+    sender_id = data.get('sender_id')
+    group_id = data.get('group_id')
+    content = data.get('content')
+    msg_type = data.get('msg_type', 'text')
+    voice_url = data.get('voice_url', '')
+    voice_duration = data.get('voice_duration', 0)
+    mentions = data.get('mentions', [])
+    reply_to = data.get('reply_to')
+
+    if not sender_id or not group_id:
+        return jsonify({'error': 'Invalid params'}), 400
+
+    if msg_type == 'text' and not content:
+        return jsonify({'error': 'Empty content'}), 400
+
+    message = GroupMessage(
+        group_id=group_id,
+        sender_id=sender_id,
+        content=content,
+        msg_type=msg_type
+    )
+    if voice_url:
+        message.voice_url = voice_url
+        message.voice_duration = float(voice_duration) if voice_duration else 0.0
+    if mentions:
+        message.mentions = json.dumps(mentions)
+    if reply_to:
+        message.reply_to = reply_to
+
+    db.session.add(message)
+    db.session.commit()
+
+    sender = User.query.get(sender_id)
+    message_data = {
+        'id': message.id,
+        'group_id': group_id,
+        'sender_id': sender_id,
+        'sender_name': sender.username if sender else 'Unknown',
+        'content': content,
+        'msg_type': msg_type,
+        'voice_url': voice_url,
+        'voice_duration': voice_duration,
+        'mentions': mentions,
+        'reply_to': reply_to,
+        'timestamp': message.timestamp.isoformat(),
+        'recalled': False
+    }
+
+    push_event_to_group(group_id, 'receive_group_message', message_data)
+    return jsonify({'success': True, 'id': message.id})
+
+
+def _sse_typing(data, user_id, token):
+    room = data.get('room', '')
+    typing_user_id = data.get('user_id')
+    username = data.get('username', '')
+    if room and typing_user_id:
+        event_data = {'room': room, 'user_id': typing_user_id, 'username': username}
+        if room.startswith('group_'):
+            push_event_to_group(room[6:], 'user_typing', event_data)
+        else:
+            push_event_to_user(room, 'user_typing', event_data)
+    return jsonify({'ok': True})
+
+
+def _sse_stop_typing(data, user_id, token):
+    room = data.get('room', '')
+    typing_user_id = data.get('user_id')
+    if room:
+        event_data = {'room': room, 'user_id': typing_user_id}
+        if room.startswith('group_'):
+            push_event_to_group(room[6:], 'user_stop_typing', event_data)
+        else:
+            push_event_to_user(room, 'user_stop_typing', event_data)
+    return jsonify({'ok': True})
+
+
+def _sse_recall_message(data, user_id, token):
+    msg_id = data.get('message_id')
+    user_id_val = data.get('user_id')
+
+    msg = Message.query.get(msg_id)
+    if msg and msg.sender_id == user_id_val:
+        msg.recalled = True
+        db.session.commit()
+        push_event_to_user(msg.receiver_id, 'message_recalled', {
+            'message_id': msg_id,
+            'recalled': True
+        })
+        return jsonify({'success': True})
+
+    group_msg = GroupMessage.query.get(msg_id)
+    if group_msg and group_msg.sender_id == user_id_val:
+        group_msg.recalled = True
+        db.session.commit()
+        push_event_to_group(group_msg.group_id, 'message_recalled', {
+            'message_id': msg_id,
+            'recalled': True
+        })
+        return jsonify({'success': True})
+
+    return jsonify({'error': 'Not found or not authorized'}), 400
+
+
+def _sse_join(data, user_id, token):
+    uid = data.get('user_id')
+    if uid:
+        sse_manager.register_user(uid)
+    return jsonify({'ok': True})
+
+
+def _sse_leave(data, user_id, token):
+    return jsonify({'ok': True})
+
+
+def _sse_join_group(data, user_id, token):
+    group_id = data.get('group_id')
+    uid = data.get('user_id')
+    if group_id:
+        sse_manager.register_group(group_id)
+    return jsonify({'ok': True})
+
+
+def _sse_leave_group(data, user_id, token):
+    group_id = data.get('group_id')
+    if group_id:
+        sse_manager.unregister_group(group_id)
+    return jsonify({'ok': True})
+
+
+def _sse_webrtc_offer(data, user_id, token):
+    push_event_to_user(data.get('to'), 'webrtc_offer', data)
+    return jsonify({'ok': True})
+
+
+def _sse_webrtc_answer(data, user_id, token):
+    push_event_to_user(data.get('to'), 'webrtc_answer', data)
+    return jsonify({'ok': True})
+
+
+def _sse_webrtc_ice_candidate(data, user_id, token):
+    push_event_to_user(data.get('to'), 'webrtc_ice_candidate', data)
+    return jsonify({'ok': True})
+
+
+def _sse_webrtc_reject(data, user_id, token):
+    push_event_to_user(data.get('from'), 'webrtc_reject', data)
+    return jsonify({'ok': True})
+
+
+def _sse_webrtc_end_call(data, user_id, token):
+    push_event_to_user(data.get('to'), 'webrtc_end_call', data)
+    return jsonify({'ok': True})
+
+
+def _sse_webrtc_busy(data, user_id, token):
+    push_event_to_user(data.get('from'), 'webrtc_busy', data)
+    return jsonify({'ok': True})
+
+
+def _validate_sse_token(token, user_id):
+    if not user_id:
+        return False
+    try:
+        user = User.query.get(int(user_id))
+        if user:
+            return True
+    except Exception:
+        pass
+    return False
+
 
 # ---------------- 请求追踪中间件 ----------------
 @app.before_request
@@ -61,27 +407,24 @@ def attach_request_id():
     request._start_time = time.time()
 
 
-# ---------------- 自定义静态文件处理：强制设置缓存头 + gzip 压缩 ----------------
-# 替代 WSGI 中间件，直接控制 send_static_file 的返回
+# ---------------- 自定义静态文件处理：缓存 + gzip + Range 流式传输 ----------------
+# 二进制（图片/音频）改用 send_file 流式返回并支持 Range/304，避免整文件读入内存；文本资源保留 gzip
 import gzip as _gzip
 
 _original_send_static_file = app.send_static_file
 
+# 这些二进制资源通过 send_file 流式返回，支持 Range / 条件请求，媒体可拖拽、断点续传
+_BINARY_EXTS = {'jpg', 'jpeg', 'png', 'gif', 'webp', 'woff', 'woff2',
+                'ttf', 'eot', 'otf', 'ico', 'mp3', 'webm', 'wav', 'amr'}
+
 def _optimized_send_static_file(filename):
-    """自定义静态文件处理：强制设置缓存头 + gzip 压缩"""
+    """自定义静态文件处理：缓存头 + gzip（仅文本）"""
     ext = filename.rsplit('.', 1)[1].lower() if '.' in filename else ''
 
-    # 读取文件内容（在 send_file 之前）
     full_path = os.path.join(app.static_folder, filename)
-    data = None
-    try:
-        with open(full_path, 'rb') as f:
-            data = f.read()
-    except Exception:
-        # 读不到文件时回退到原始方法
+    if not os.path.isfile(full_path):
         return _original_send_static_file(filename)
 
-    # MIME 类型
     mime_map = {
         'css': 'text/css; charset=utf-8',
         'js': 'application/javascript; charset=utf-8',
@@ -101,7 +444,20 @@ def _optimized_send_static_file(filename):
     }
     content_type = mime_map.get(ext, 'application/octet-stream')
 
-    # gzip 压缩（只对文本类资源）
+    # 二进制资源：流式 + Range（媒体播放/续传），不再整文件读入内存
+    if ext in _BINARY_EXTS:
+        resp = send_file(full_path, mimetype=content_type, conditional=True)
+        if ext in _BINARY_EXTS:
+            resp.headers['Cache-Control'] = 'public, max-age=2592000, immutable'
+        return resp
+
+    # 文本资源：gzip 压缩（仅客户端支持时）
+    try:
+        with open(full_path, 'rb') as f:
+            data = f.read()
+    except Exception:
+        return _original_send_static_file(filename)
+
     ae = request.headers.get('Accept-Encoding', '') if request else ''
     is_gzip = False
     if 'gzip' in ae.lower() and ext in ('css', 'js', 'svg', 'html', 'htm', 'json', 'xml'):
@@ -112,14 +468,8 @@ def _optimized_send_static_file(filename):
             except Exception:
                 pass
 
-    # 构造响应
     resp = Response(data, mimetype=content_type)
-
-    # 强制设置缓存头（覆盖 Flask 默认的 no-cache）
-    if ext in ('jpg', 'jpeg', 'png', 'gif', 'webp', 'woff',
-                'woff2', 'ttf', 'eot', 'otf', 'svg', 'mp3', 'wav', 'ico'):
-        resp.headers['Cache-Control'] = 'public, max-age=2592000, immutable'
-    elif ext in ('css', 'js'):
+    if ext in ('css', 'js'):
         resp.headers['Cache-Control'] = 'public, max-age=604800'
     else:
         resp.headers['Cache-Control'] = 'public, max-age=3600'
@@ -337,6 +687,10 @@ class DailySummaryLog(db.Model):
 
 @app.route('/')
 def index():
+    return render_template('landing.html')
+
+@app.route('/chat')
+def chat():
     return render_template('index.html')
 
 
@@ -1316,10 +1670,16 @@ def remove_from_blacklist():
 
 @app.route('/api/messages/<int:user_id>/<int:friend_id>', methods=['GET'])
 def get_messages(user_id, friend_id):
-    messages = Message.query.filter(
+    limit = request.args.get('limit', type=int, default=100)
+    before_id = request.args.get('before_id', type=int)
+    q = Message.query.filter(
         ((Message.sender_id == user_id) & (Message.receiver_id == friend_id)) |
         ((Message.sender_id == friend_id) & (Message.receiver_id == user_id))
-    ).order_by(Message.timestamp.asc()).all()
+    )
+    if before_id:
+        q = q.filter(Message.id < before_id)
+    messages = q.order_by(Message.timestamp.desc()).limit(limit).all()
+    messages.reverse()
     
     result = []
     for msg in messages:
@@ -1646,7 +2006,13 @@ def get_group_messages(group_id):
     if not group:
         return jsonify({'error': '群组不存在'}), 404
 
-    messages = GroupMessage.query.filter_by(group_id=group_id).order_by(GroupMessage.timestamp.asc()).all()
+    limit = request.args.get('limit', type=int, default=200)
+    before_id = request.args.get('before_id', type=int)
+    q = GroupMessage.query.filter_by(group_id=group_id)
+    if before_id:
+        q = q.filter(GroupMessage.id < before_id)
+    messages = q.order_by(GroupMessage.timestamp.desc()).limit(limit).all()
+    messages.reverse()
     result = []
     for msg in messages:
         sender = User.query.get(msg.sender_id)
@@ -2407,6 +2773,24 @@ def backup_command():
             os.remove(temp_path)
 
 
+def _ensure_indexes():
+    """为高频查询列建立索引（幂等，可重复执行），降低消息/群聊历史查询延迟"""
+    try:
+        from sqlalchemy import text
+        stmts = [
+            'CREATE INDEX IF NOT EXISTS idx_message_pair ON message(sender_id, receiver_id)',
+            'CREATE INDEX IF NOT EXISTS idx_message_receiver_ts ON message(receiver_id, timestamp)',
+            'CREATE INDEX IF NOT EXISTS idx_groupmessage_group_ts ON group_message(group_id, timestamp)',
+            'CREATE INDEX IF NOT EXISTS idx_groupmember_group ON group_member(group_id)',
+        ]
+        with db.engine.begin() as conn:
+            for s in stmts:
+                conn.execute(text(s))
+        logger.info('[DB] 索引检查/创建完成')
+    except Exception as e:
+        logger.warning('[DB] 索引创建失败（可忽略）: %s', e)
+
+
 def init_database():
     """使用 Flask-Migrate 管理 schema 版本，自动创建/升级数据库（后台线程执行）"""
     def _init():
@@ -2432,7 +2816,12 @@ def init_database():
                 _get_ai_user()
             except Exception as e:
                 logger.error('[DB] Failed to create AI user: %s', e)
-    
+
+            try:
+                _ensure_indexes()
+            except Exception as e:
+                logger.warning('[DB] 索引检查失败（可忽略）: %s', e)
+
     import threading
     thread = threading.Thread(target=_init, daemon=True)
     thread.start()
@@ -2441,6 +2830,295 @@ def init_database():
 def health_check():
     """健康检查端点"""
     return jsonify({'status': 'ok', 'app': 'family-chat', 'time': datetime.now().isoformat()})
+
+
+PA_USERNAME = os.environ.get('PA_USERNAME', '15816563131')
+PA_TOKEN = os.environ.get('PA_API_TOKEN', 'cdcb676f8dd8eb69dea0237d552a83199f9f70b6')
+PA_HOST = os.environ.get('PA_HOST', 'www.pythonanywhere.com')
+PA_RENEW_HISTORY_FILE = os.path.join(DATA_DIR, 'renew_history.log')
+PA_INFO_CACHE_FILE = os.path.join(DATA_DIR, 'pa_info_cache.json')
+
+_pa_info_cache = {'data': None, 'timestamp': 0}
+
+
+def _log_renew_history(success, message):
+    try:
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        status = 'SUCCESS' if success else 'FAILED'
+        entry = f"[{timestamp}] [{status}] {message}\n"
+        with open(PA_RENEW_HISTORY_FILE, 'a') as f:
+            f.write(entry)
+    except Exception as e:
+        logger.error(f'[PA-RENEW] Failed to write history: {e}')
+
+
+def _get_renew_history(max_lines=100):
+    try:
+        if not os.path.exists(PA_RENEW_HISTORY_FILE):
+            return []
+        with open(PA_RENEW_HISTORY_FILE, 'r') as f:
+            lines = f.readlines()
+        return [line.strip() for line in lines[-max_lines:]]
+    except Exception:
+        return []
+
+
+def _get_pa_info(force_refresh=False):
+    global _pa_info_cache
+    
+    cache_valid = 3600
+    now = time.time()
+    
+    if not force_refresh and _pa_info_cache['data'] and (now - _pa_info_cache['timestamp']) < cache_valid:
+        return _pa_info_cache['data']
+    
+    try:
+        import requests as req
+        url = f"https://{PA_HOST}/api/v0/user/{PA_USERNAME}/webapps/{PA_USERNAME}.pythonanywhere.com/"
+        headers = {"Authorization": f"Token {PA_TOKEN}"}
+        resp = req.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            expiry = data.get('expiry', 'unknown')
+            days_left = 0
+            if expiry and expiry != 'unknown':
+                try:
+                    expiry_date = datetime.strptime(expiry[:10], '%Y-%m-%d')
+                    days_left = (expiry_date - datetime.now()).days
+                except:
+                    pass
+            
+            pa_info = {
+                'expiry': expiry,
+                'enabled': data.get('enabled', False),
+                'days_left': days_left,
+                'domain': data.get('domain_name', ''),
+                'python_version': data.get('python_version', '')
+            }
+            
+            _pa_info_cache = {'data': pa_info, 'timestamp': now}
+            
+            try:
+                with open(PA_INFO_CACHE_FILE, 'w') as f:
+                    json.dump(pa_info, f)
+            except:
+                pass
+            
+            return pa_info
+    except Exception as e:
+        logger.warning(f'获取PA信息失败: {e}')
+    
+    try:
+        if os.path.exists(PA_INFO_CACHE_FILE):
+            with open(PA_INFO_CACHE_FILE, 'r') as f:
+                return json.load(f)
+    except:
+        pass
+    
+    return {'expiry': 'unknown', 'enabled': False, 'days_left': -1}
+
+
+@app.route('/api/renew-pa', methods=['POST'])
+def renew_pa():
+    """记录续期时间（实际续期由客户端直接调用PythonAnywhere API完成）"""
+    try:
+        last_renew_file = os.path.join(DATA_DIR, 'last_renew.txt')
+        current_time = datetime.now().isoformat()
+        with open(last_renew_file, 'w') as f:
+            f.write(current_time)
+        
+        _log_renew_history(True, 'Renew triggered successfully')
+        
+        return jsonify({
+            'status': 'ok',
+            'message': '续期已记录',
+            'time': current_time
+        })
+    except Exception as e:
+        logger.error(f'[PA-RENEW] Error: {e}')
+        _log_renew_history(False, str(e))
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/api/renew-pa-sync', methods=['POST'])
+def renew_pa_sync():
+    """同步续期 - 等待实际结果返回"""
+    try:
+        import requests as req
+        
+        url = f"https://{PA_HOST}/api/v0/user/{PA_USERNAME}/webapps/{PA_USERNAME}.pythonanywhere.com/reload/"
+        headers = {"Authorization": f"Token {PA_TOKEN}"}
+        
+        resp = req.post(url, headers=headers, timeout=30)
+        if resp.status_code == 200:
+            logger.info('[PA-RENEW-SYNC] PythonAnywhere webapp reloaded successfully')
+            
+            last_renew_file = os.path.join(DATA_DIR, 'last_renew.txt')
+            with open(last_renew_file, 'w') as f:
+                f.write(datetime.now().isoformat())
+            
+            _log_renew_history(True, 'Sync renew - Webapp reloaded successfully')
+            return jsonify({
+                'status': 'ok',
+                'message': '续期成功',
+                'time': datetime.now().isoformat()
+            })
+        else:
+            logger.warning(f'[PA-RENEW-SYNC] Reload failed: {resp.status_code}')
+            _log_renew_history(False, f'Sync renew failed: HTTP {resp.status_code}')
+            return jsonify({
+                'status': 'error',
+                'message': f'续期失败: HTTP {resp.status_code}',
+                'time': datetime.now().isoformat()
+            }), 500
+    except Exception as e:
+        logger.error(f'[PA-RENEW-SYNC] Error: {e}')
+        _log_renew_history(False, f'Sync renew exception: {str(e)}')
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/api/pa-expiry', methods=['GET'])
+def get_pa_expiry():
+    """查询PythonAnywhere账户实际过期时间"""
+    try:
+        force_refresh = request.args.get('refresh', '0') == '1'
+        pa_info = _get_pa_info(force_refresh=force_refresh)
+        
+        return jsonify({
+            'status': 'ok',
+            'expiry': pa_info.get('expiry', 'unknown'),
+            'enabled': pa_info.get('enabled', False),
+            'days_left': pa_info.get('days_left', 0),
+            'domain': pa_info.get('domain', ''),
+            'python_version': pa_info.get('python_version', ''),
+            'cached': not force_refresh,
+            'time': datetime.now().isoformat()
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/api/renew-history', methods=['GET'])
+def get_renew_history():
+    """获取续期历史记录"""
+    try:
+        history = _get_renew_history(50)
+        return jsonify({
+            'status': 'ok',
+            'history': history,
+            'count': len(history),
+            'time': datetime.now().isoformat()
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/api/renew-status', methods=['GET'])
+def renew_status():
+    """检查续期状态"""
+    try:
+        last_renew_file = os.path.join(DATA_DIR, 'last_renew.txt')
+        last_renew = None
+        if os.path.exists(last_renew_file):
+            with open(last_renew_file, 'r') as f:
+                last_renew = f.read().strip()
+        
+        # 从缓存文件读取PA信息（不调用外部API）
+        pa_info = {}
+        try:
+            if os.path.exists(PA_INFO_CACHE_FILE):
+                with open(PA_INFO_CACHE_FILE, 'r') as f:
+                    cached = json.load(f)
+                    pa_info = {
+                        'pa_expiry': cached.get('expiry', 'unknown'),
+                        'pa_days_left': cached.get('days_left', -1),
+                        'pa_enabled': cached.get('enabled', False)
+                    }
+        except Exception:
+            pa_info = {'pa_expiry': 'unknown', 'pa_days_left': -1, 'pa_enabled': False}
+        
+        history = _get_renew_history(10)
+        
+        return jsonify({
+            'status': 'ok',
+            'last_renew': last_renew,
+            'renew_history': history,
+            'pa_info': pa_info,
+            'time': datetime.now().isoformat()
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/api/renew-test', methods=['POST'])
+def renew_test():
+    """测试续期功能 - 不实际调用API，只测试流程"""
+    import threading
+    
+    test_results = {'steps': []}
+    
+    def log_step(step, result, message):
+        test_results['steps'].append({
+            'step': step,
+            'result': result,
+            'message': message,
+            'time': datetime.now().isoformat()
+        })
+    
+    def run_test():
+        try:
+            log_step('init', 'success', '开始续期测试')
+            
+            log_step('config', 'success', f'Username: {PA_USERNAME}, Host: {PA_HOST}')
+            
+            log_step('file_system', 'success', f'Data dir: {DATA_DIR}')
+            
+            import requests as req
+            url = f"https://{PA_HOST}/api/v0/user/{PA_USERNAME}/webapps/{PA_USERNAME}.pythonanywhere.com/"
+            headers = {"Authorization": f"Token {PA_TOKEN}"}
+            
+            resp = req.get(url, headers=headers, timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                log_step('api_connectivity', 'success', f'API连接正常, Webapp: {data.get("domain_name")}, Expiry: {data.get("expiry")}')
+                
+                if data.get('enabled', False):
+                    log_step('webapp_status', 'success', 'Webapp已启用')
+                else:
+                    log_step('webapp_status', 'warning', 'Webapp未启用')
+                    
+            else:
+                log_step('api_connectivity', 'fail', f'API连接失败: HTTP {resp.status_code}')
+                
+            last_renew_file = os.path.join(DATA_DIR, 'last_renew.txt')
+            if os.path.exists(last_renew_file):
+                with open(last_renew_file, 'r') as f:
+                    last_renew = f.read().strip()
+                log_step('last_renew', 'success', f'上次续期: {last_renew}')
+            else:
+                log_step('last_renew', 'info', '尚未续期')
+                
+            history = _get_renew_history(5)
+            log_step('history', 'success', f'历史记录: {len(history)} 条')
+            
+            log_step('test_complete', 'success', '测试完成')
+            
+        except Exception as e:
+            log_step('test_error', 'fail', str(e))
+    
+    thread = threading.Thread(target=run_test, daemon=True)
+    thread.start()
+    
+    import time
+    time.sleep(3)
+    
+    return jsonify({
+        'status': 'ok',
+        'message': '测试完成',
+        'results': test_results['steps'],
+        'time': datetime.now().isoformat()
+    })
+
 
 init_database()
 

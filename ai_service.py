@@ -12,6 +12,10 @@ import logging
 import os
 import requests
 
+# 复用连接池，降低对 Ollama / 远程 API 的请求延迟（keep-alive）
+_http_session = requests.Session()
+_http_session.headers.update({'Connection': 'keep-alive', 'Keep-Alive': 'timeout=60'})
+
 from config import (
     SUMMARY_SYSTEM_PROMPT, AI_QA_SYSTEM_PROMPT, REMINDER_SYSTEM_PROMPT,
     SUMMARY_MAX_CHARS
@@ -68,7 +72,7 @@ def is_ai_available():
 def _is_ollama_running():
     """检测本地 Ollama 服务是否运行"""
     try:
-        resp = requests.get(OLLAMA_BASE_URL + '/api/tags', timeout=3)
+        resp = _http_session.get(OLLAMA_BASE_URL + '/api/tags', timeout=3)
         if resp.status_code == 200:
             models = resp.json().get('models', [])
             if models:
@@ -100,7 +104,7 @@ def _check_llamacpp():
 def _get_ollama_model_name():
     """获取 Ollama 可用模型名"""
     try:
-        resp = requests.get(OLLAMA_BASE_URL + '/api/tags', timeout=3)
+        resp = _http_session.get(OLLAMA_BASE_URL + '/api/tags', timeout=3)
         if resp.status_code == 200:
             models = resp.json().get('models', [])
             if models:
@@ -145,7 +149,7 @@ def _call_ollama(messages, stream=False, max_tokens=500, temperature=0.7):
     }
 
     try:
-        resp = requests.post(
+        resp = _http_session.post(
             OLLAMA_BASE_URL + '/v1/chat/completions',
             json=payload,
             timeout=60,
@@ -246,7 +250,7 @@ def _call_remote_api(messages, stream=False, max_tokens=500, temperature=0.7):
     model = os.environ.get('AI_MODEL', 'deepseek-chat')
 
     try:
-        resp = requests.post(
+        resp = _http_session.post(
             base_url + '/chat/completions',
             headers={
                 'Authorization': 'Bearer ' + api_key,

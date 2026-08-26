@@ -28,7 +28,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class FamilyChatApp extends Application {
 
-    public static final String WEB_URL = "https://family-chat.onrender.com";
+    // 免服务器：直接加载打包在 APK 内的 PWA（assets/index.html），无需任何后端
+    public static final String WEB_URL = "file:///android_asset/index.html";
     public static final String TAG = "FamilyChat";
     public static final String PREFS_NAME = "FamilyChatPrefs";
     public static final String KEY_USER_ID = "userId";

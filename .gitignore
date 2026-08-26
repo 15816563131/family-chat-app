@@ -105,3 +105,46 @@ we-chat-png.png
 # 上传的头像文件
 static/uploads/
 static/uploads/*
+
+# 临时部署/测试脚本
+deploy_*.py
+deploy/
+test_*.py
+test_*.js
+check_*.py
+wait_*.py
+upload_*.py
+reload_*.py
+wait_*.py
+install_*.py
+install_*.ps1
+auto_deploy.py
+run_*.py
+start_*.py
+sse_push.py
+pa_auto_renew.py
+hf_*.py
+pythonanywhere_wsgi.py
+silent_start.vbs
+public_url.txt
+
+# 临时构建产物
+*.zip
+loadtest.*
+FamilyChat.apk
+outputs/
+gh_fresh/
+gh_fresh2/
+gradlehome/
+keystore/
+.workbuddy/
+b1*.txt
+build_log*.txt
+
+# HuggingFace部署文档
+HUGGINGFACE_DEPLOY.md
+
+# Android旧构建
+family-chat-android/android/app/build_old/
+family-chat-android/android/_gradle_old/
+family-chat-android/android/d/

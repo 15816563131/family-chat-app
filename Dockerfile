@@ -24,7 +24,7 @@ RUN useradd -m -u 1000 appuser && \
     chown -R appuser:appuser /app /data
 USER appuser
 
-EXPOSE 8080
+EXPOSE 7860
 
-# Hugging Face Spaces 自动注入 PORT 环境变量
-CMD ["sh", "-c", "gunicorn app:app --bind 0.0.0.0:${PORT:-8080} -k eventlet -w 1 --timeout 120"]
+# Hugging Face Spaces 自动注入 PORT 环境变量，默认 7860
+CMD ["sh", "-c", "gunicorn app:app --bind 0.0.0.0:${PORT:-7860} -k eventlet -w 1 --timeout 120"]

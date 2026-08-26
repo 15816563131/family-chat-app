@@ -23,12 +23,11 @@ import java.net.URL;
 public class MessagePollService {
     private static final String TAG = "FamilyChat";
     private static final String PREFS_NAME = "FamilyChatPrefs";
-    private static final String KEY_USER_ID = "userId";
-    private static final String KEY_LAST_CHECK = "lastCheck";
-    private static final String KEY_KNOWN_MSG_PREFIX = "known_msg_";
-    private static final String SERVER_URL = "https://family-chat.onrender.com";
-    private static final long POLL_INTERVAL_MS = 10000;
-    private static final long RETRY_INTERVAL_MS = 3000;
+    private static final String KEY_ROOM = "room";
+    private static final String KEY_UID = "uid";
+    private static final String NTFY_BASE = "https://ntfy.sh";
+    private static final long POLL_INTERVAL_MS = 15000;
+    private static final long RETRY_INTERVAL_MS = 5000;
     private static final int MAX_CONSECUTIVE_FAILURES = 3;
 
     private Context context;
@@ -48,12 +47,12 @@ public class MessagePollService {
         if (isRunning) return;
         isRunning = true;
         consecutiveFailures = 0;
-        Log.d(TAG, "MessagePollService started");
+        Log.d(TAG, "MessagePollService started (ntfy relay)");
         pollRunnable = new Runnable() {
             @Override
             public void run() {
                 pollForMessages();
-                long interval = consecutiveFailures >= MAX_CONSECUTIVE_FAILURES && !hasEverSucceeded
+                long interval = (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES && !hasEverSucceeded)
                         ? RETRY_INTERVAL_MS : POLL_INTERVAL_MS;
                 handler.postDelayed(this, interval);
             }
@@ -70,41 +69,50 @@ public class MessagePollService {
     }
 
     public void setUserId(int userId) {
+        // 保留兼容：也写入 userId，但新逻辑主要使用 room + uid
         SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-        int prevId = prefs.getInt(KEY_USER_ID, -1);
-        if (prevId == userId) {
-            if (!isRunning) {
-                startPolling();
-            }
-            return;
-        }
-        prefs.edit().putInt(KEY_USER_ID, userId).apply();
-        prefs.edit().remove(KEY_LAST_CHECK).apply();
+        prefs.edit().putInt("userId", userId).apply();
         Log.d(TAG, "User ID set: " + userId);
         if (!isRunning) {
             startPolling();
         }
     }
 
+    public void setRoom(String room) {
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        prefs.edit().putString(KEY_ROOM, room).apply();
+        startIfReady();
+    }
+
+    public void setUid(String uid) {
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        prefs.edit().putString(KEY_UID, uid).apply();
+        startIfReady();
+    }
+
+    private void startIfReady() {
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        if (!prefs.getString(KEY_ROOM, "").isEmpty() && !prefs.getString(KEY_UID, "").isEmpty()) {
+            if (!isRunning) startPolling();
+        }
+    }
+
     private void pollForMessages() {
         SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-        int userId = prefs.getInt(KEY_USER_ID, -1);
-        if (userId < 0) {
-            Log.w(TAG, "No user ID set, skipping poll");
+        String room = prefs.getString(KEY_ROOM, "");
+        String myUid = prefs.getString(KEY_UID, "");
+        if (room.isEmpty() || myUid.isEmpty()) {
+            Log.w(TAG, "No room/uid set, skipping poll");
             return;
         }
 
-        long lastCheck = prefs.getLong(KEY_LAST_CHECK, 0);
-        long currentTime = System.currentTimeMillis();
+        long lastCheck = prefs.getLong("lastNtfyTs", 0);
 
         new Thread(() -> {
             HttpURLConnection conn = null;
             try {
-                String urlStr = SERVER_URL + "/api/recent_messages/" + userId;
-                if (lastCheck > 0) {
-                    urlStr += "?since=" + lastCheck;
-                }
-                Log.d(TAG, "Polling: " + urlStr);
+                String urlStr = NTFY_BASE + "/" + room + "/json?since=" + (lastCheck > 0 ? lastCheck : 1);
+                Log.d(TAG, "Polling ntfy: " + urlStr);
 
                 URL url = new URL(urlStr);
                 conn = (HttpURLConnection) url.openConnection();
@@ -131,28 +139,39 @@ public class MessagePollService {
                 hasEverSucceeded = true;
                 consecutiveFailures = 0;
 
-                if (messages.length() > 0) {
-                    Log.d(TAG, "Polled " + messages.length() + " new messages");
-                }
+                long maxTs = lastCheck;
+                SharedPreferences known = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+                boolean changed = false;
 
                 for (int i = 0; i < messages.length(); i++) {
                     JSONObject msg = messages.getJSONObject(i);
-                    int msgId = msg.getInt("id");
-                    int senderId = msg.getInt("sender_id");
-                    String senderName = msg.optString("sender_name", "好友");
-                    String content = msg.optString("content", "");
+                    String msgId = msg.optString("id", "");
+                    String senderUid = "";
+                    JSONArray tags = msg.optJSONArray("tags");
+                    if (tags != null && tags.length() > 0) {
+                        senderUid = tags.optString(0, "");
+                    }
+                    if (senderUid.equals(myUid)) continue; // 跳过自己发的
 
-                    if (senderId == userId) continue;
+                    String senderName = msg.optString("title", "家人");
+                    String content = msg.optString("message", "");
+                    long t = msg.optLong("time", 0);
+                    if (t > maxTs) maxTs = t;
 
-                    String knownKey = KEY_KNOWN_MSG_PREFIX + msgId;
-                    if (!prefs.getBoolean(knownKey, false)) {
-                        Log.d(TAG, "New message from " + senderName + ": " + content.substring(0, Math.min(content.length(), 20)));
-                        showPollNotification(senderName, content, msgId);
-                        prefs.edit().putBoolean(knownKey, true).apply();
+                    // 仅在后台时由原生弹通知，避免与网页内通知重复
+                    if (!FamilyChatApp.isAppForeground) {
+                        String knownKey = "known_ntfy_" + msgId;
+                        if (!known.getBoolean(knownKey, false) && !content.isEmpty()) {
+                            showPollNotification(senderName, content);
+                            known.edit().putBoolean(knownKey, true).apply();
+                            changed = true;
+                        }
                     }
                 }
 
-                prefs.edit().putLong(KEY_LAST_CHECK, currentTime).apply();
+                if (maxTs > lastCheck || changed) {
+                    prefs.edit().putLong("lastNtfyTs", maxTs).apply();
+                }
 
             } catch (Exception e) {
                 Log.w(TAG, "Poll failed: " + e.getMessage());
@@ -168,11 +187,11 @@ public class MessagePollService {
         }).start();
     }
 
-    private void showPollNotification(String senderName, String content, int msgId) {
+    private void showPollNotification(String senderName, String content) {
         try {
             Intent intent = new Intent(context, MainActivity.class);
             intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-            PendingIntent pendingIntent = PendingIntent.getActivity(context, msgId, intent,
+            PendingIntent pendingIntent = PendingIntent.getActivity(context, notificationId, intent,
                     PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
 
             String displayContent = content.length() > 100 ? content.substring(0, 100) + "..." : content;

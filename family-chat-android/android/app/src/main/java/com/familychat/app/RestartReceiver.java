@@ -12,6 +12,7 @@ public class RestartReceiver extends BroadcastReceiver {
     private static final String TAG = "FamilyChat";
     public static final String ACTION_RESTART_SERVICE = "com.familychat.app.RESTART_SERVICE";
     public static final String ACTION_POLL = "com.familychat.app.POLL";
+    public static final String ACTION_RENEW_CHECK = "com.familychat.app.RENEW_CHECK";
 
     @Override
     public void onReceive(Context context, Intent intent) {
@@ -39,6 +40,9 @@ public class RestartReceiver extends BroadcastReceiver {
                     context.startService(pollIntent);
                 }
                 Log.d(TAG, "RestartReceiver: poll trigger sent");
+            } else if (ACTION_RENEW_CHECK.equals(action)) {
+                RenewHelper.checkAndRenew(context);
+                Log.d(TAG, "RestartReceiver: renew check triggered");
             }
         } catch (Exception e) {
             Log.e(TAG, "RestartReceiver error: " + e.getMessage());
