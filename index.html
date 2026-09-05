@@ -537,6 +537,7 @@ body::after{width:40vw;height:40vw;right:-6vw;top:8vw;background:radial-gradient
     <form class="composer" id="form">
       <div class="ic" id="micBtn" title="语音消息">🎤</div>
       <div class="ic" id="imgBtn" title="发送图片">🖼</div>
+      <div class="ic" id="atBtn" title="提醒谁看（@）">@</div>
       <div class="ic" id="emojiBtn">😊</div>
       <textarea id="text" rows="1" placeholder="发送消息…" disabled></textarea>
       <button type="submit" class="send" id="sendBtn" disabled>发送</button>
@@ -1078,7 +1079,8 @@ function handleIncoming(topic, m, fromHistory){
   const parsed = parseQuote(m.message||"");
   const pm = parseMerge(parsed.text);
   if(pm.ok){ addLocalMsg(topic, {id:m.id, sender, name:decTitle(m.title)||"对方", text:"", merge:pm.items, time:(m.time||Date.now()/1000), self:false, mentioned:false}, {silentUnread:false}); if(!fromHistory) playNewMsgCue(topic); return; }
-  const mentioned = !!myName && myName.length>0 && parsed.text.indexOf("@"+myName) >= 0;
+  const _c=getChat(topic); const _isGroup=_c && _c.type==="group";
+  const mentioned = !!myName && myName.length>0 && (parsed.text.indexOf("@"+myName) >= 0 || (_isGroup && parsed.text.indexOf("@所有人")>=0));
   addLocalMsg(topic, {id:m.id, sender, name:decTitle(m.title)||"对方", text:parsed.text, quote:parsed.quote, time:(m.time||Date.now()/1000), self:false, mentioned}, {silentUnread:false});
   if(!fromHistory) playNewMsgCue(topic);
 }
@@ -1350,20 +1352,39 @@ function showChatMenu(c){
 function renderContacts(){
   const box=$("contactsList"); box.innerHTML="";
   if(chats.length===0){
-    box.innerHTML='<div class="empty"><div class="big">👥</div><div>通讯录为空</div></div>'; return;
+    box.innerHTML='<div class="empty"><div class="big">👥</div><div>通讯录为空</div></div>';
+    const add=document.createElement("div"); add.className="item";
+    add.innerHTML='<div class="avatar" style="background:#07C160">+</div><div class="mid"><div class="name">新的聊天</div></div>';
+    add.onclick=openAddDialog; box.appendChild(add); return;
   }
-  const visCh=chats.filter(c=>!c.hidden);
-  const g=document.createElement("div"); g.className="group-title"; g.textContent="聊天 ("+visCh.length+")"; box.appendChild(g);
-  visCh.forEach(c=>{
-    const it=document.createElement("div"); it.className="item";
-    const av=document.createElement("div"); av.className="avatar"; av.style.background=c.color; av.textContent=avatarText(c.name);
-    const mid=document.createElement("div"); mid.className="mid";
-    const nm=document.createElement("div"); nm.className="name"; nm.textContent=c.name;
-    mid.appendChild(nm);
-    it.appendChild(av); it.appendChild(mid);
-    it.onclick=()=>openChat(c.topic);
-    box.appendChild(it);
-  });
+  const friends=chats.filter(c=>!c.hidden && c.type!=="group");
+  const groups=chats.filter(c=>!c.hidden && c.type==="group");
+  if(friends.length){
+    const g=document.createElement("div"); g.className="group-title"; g.textContent="好友 ("+friends.length+")"; box.appendChild(g);
+    friends.forEach(c=>{
+      const it=document.createElement("div"); it.className="item";
+      const av=document.createElement("div"); av.className="avatar"; av.style.background=c.color; av.textContent=avatarText(c.name);
+      const mid=document.createElement("div"); mid.className="mid";
+      const nm=document.createElement("div"); nm.className="name"; nm.textContent=c.name;
+      mid.appendChild(nm);
+      it.appendChild(av); it.appendChild(mid);
+      it.onclick=()=>openChat(c.topic);
+      box.appendChild(it);
+    });
+  }
+  if(groups.length){
+    const g=document.createElement("div"); g.className="group-title"; g.textContent="群聊 ("+groups.length+")"; box.appendChild(g);
+    groups.forEach(c=>{
+      const it=document.createElement("div"); it.className="item";
+      const av=document.createElement("div"); av.className="avatar"; av.style.background=c.color; av.textContent=avatarText(c.name);
+      const mid=document.createElement("div"); mid.className="mid";
+      const nm=document.createElement("div"); nm.className="name"; nm.textContent=c.name+(c.members?"（"+(c.members.length)+"）":"");
+      mid.appendChild(nm);
+      it.appendChild(av); it.appendChild(mid);
+      it.onclick=()=>openChat(c.topic);
+      box.appendChild(it);
+    });
+  }
   // 添加入口
   const add=document.createElement("div"); add.className="item";
   add.innerHTML='<div class="avatar" style="background:#07C160">+</div><div class="mid"><div class="name">新的聊天</div></div>';
@@ -1523,7 +1544,8 @@ function highlightAt(html){
   if(!html) return html;
   return html.replace(/@([^\s@，。、！？,!?]{1,20})/g, (full, name)=>{
     const me = (myName && name===myName);
-    return '<span class="at'+(me?' me':'')+'">@'+name+'</span>';
+    const all = (name==="所有人");
+    return '<span class="at'+(me||all?' me':'')+'">@'+name+'</span>';
   });
 }
 
@@ -2082,6 +2104,19 @@ function addStickerFile(file){
   reader.readAsDataURL(file);
 }
 $("emojiBtn").onclick=()=>{ const p=$("emojiPanel"); buildEmoji(); p.classList.toggle("show"); if(p.classList.contains("show")) $("text").blur(); };
+$("atBtn").onclick=()=>{
+  const c=getChat(activeTopic);
+  if(!c || c.type!=="group"){ toast("私聊直接发就好啦~"); return; }
+  const opts=[{label:"@所有人", fn:()=>insertAt("@所有人 ")}];
+  (c.members||[]).filter(m=>m.uid!==uid).forEach(m=>{ const nm=m.name||"成员"; opts.push({label:"@"+nm, fn:()=>insertAt("@"+nm+" ")}); });
+  openSheet(opts);
+};
+function insertAt(txt){
+  const ta=$("text"); const s=ta.selectionStart||0; const e=ta.selectionEnd||0;
+  ta.value = ta.value.slice(0,s)+txt+ta.value.slice(e);
+  ta.focus(); autoGrow(ta);
+  const pos=s+txt.length; try{ ta.setSelectionRange(pos,pos); }catch(_){}
+}
 $("stickerFile").onchange=(e)=>{ const f=e.target.files&&e.target.files[0]; addStickerFile(f); e.target.value=""; };
 $("imgBtn").onclick=()=>{ $("imgFile").click(); };
 $("imgFile").onchange=(e)=>{
@@ -2134,8 +2169,8 @@ function deleteChat(topic){
 function openAddDialog(){
   openSheet([
     {label:"发起群聊", fn:()=>createGroup()},
-    {label:"发起新聊天", fn:()=>createChat()},
-    {label:"加入已有聊天", fn:()=>joinChat()},
+    {label:"添加好友（私聊）", fn:()=>createPrivate()},
+    {label:"加入聊天（邀请码/链接）", fn:()=>joinChat()},
   ]);
 }
 function createGroup(){
@@ -2150,34 +2185,57 @@ function createGroup(){
     toast("群聊已创建，把邀请发给家人即可多人聊天");
   });
 }
-function createChat(){
-  promptDialog("发起新聊天","给这个聊天起个名字（如：家庭群聊）","",(name)=>{
-    name=(name||"").trim()||"新聊天";
+function createPrivate(){
+  promptDialog("添加好友（私聊）","给这位家人起个备注名（如：爸爸、小明）：","",(fn)=>{
+    fn=(fn||"").trim(); if(!fn) return;
     const topic = "fc"+Math.random().toString(36).slice(2,12);
-    const c=mkChat(name, topic); chats.unshift(c); saveChats(); syncNative();
+    const c=mkChat(fn, topic); c.type="single"; c.peer=fn; chats.unshift(c); saveChats(); syncNative();
     connectTopic(topic); renderChats(); updateTabBadge();
-    showInvite(c);
-  });
-}
-function joinChat(){
-  promptDialog("加入聊天","输入家人分享的「邀请码」或「邀请链接」：","",(code)=>{
-    code=(code||"").trim(); if(!code) return;
-    // 支持直接粘贴链接，提取 ?invite=
-    const m=code.match(/invite=([^&\s]+)/); if(m) code=m[1];
-    code=code.replace(/[^a-zA-Z0-9_-]/g,"");
-    if(!code) { toast("邀请码无效"); return; }
-    if(chats.some(c=>c.topic===code)){ toast("已在列表中"); openChat(code); return; }
-    const c=mkChat("家人", code); chats.unshift(c); saveChats(); syncNative();
-    if(code.indexOf("fg")===0){ c.type="group"; c.members=[{uid:uid, name:myName||"我"}]; }
-    connectTopic(code); loadHistory(code); renderChats(); updateTabBadge();
-    setTimeout(()=>openChat(code),300);
+    showInvite(c, {private:true});
+    toast("私聊已创建，把邀请发给 TA 即可一对一聊天");
   }, true);
 }
-function showInvite(c){
-  const link = (location.protocol.indexOf("http")===0 ? location.origin+location.pathname : "https://15816563131.github.io/family-chat-app/") + "?invite=" + c.topic;
+function joinChat(){
+  promptDialog("加入聊天","输入家人分享的「邀请码」或「邀请链接」：","",(raw)=>{
+    raw=(raw||"").trim(); if(!raw) return;
+    // 支持直接粘贴链接，提取 ?invite= 与可选的 &n=创建者昵称
+    let nameParam=null;
+    const im=raw.match(/invite=([^&\s]+)/);
+    if(im){ raw=im[1]; const nm=raw.match(/[?&]n=([^&\s]+)/); if(nm) nameParam=decodeURIComponent(nm[1]); }
+    let code=raw.replace(/[^a-zA-Z0-9_-]/g,"");
+    if(!code) { toast("邀请码无效"); return; }
+    if(chats.some(c=>c.topic===code)){ toast("已在列表中"); openChat(code); return; }
+    const isGroup = code.indexOf("fg")===0;
+    if(isGroup){
+      const c=mkChat("群聊", code); c.type="group"; c.members=[{uid:uid, name:myName||"我"}];
+      chats.unshift(c); saveChats(); syncNative();
+      connectTopic(code); loadHistory(code); renderChats(); updateTabBadge();
+      setTimeout(()=>openChat(code),300);
+    } else {
+      // 私聊：用创建者昵称作备注；若链接未带 n=，则让本端填备注名
+      if(nameParam){
+        finalizePrivate(code, nameParam);
+      } else {
+        promptDialog("添加好友","给这位家人起个备注名：","",(fn)=>{ finalizePrivate(code, (fn||"").trim()||"好友"); }, true);
+      }
+    }
+  }, true);
+}
+function finalizePrivate(topic, friendName){
+  const c=mkChat(friendName, topic); c.type="single"; c.peer=friendName;
+  chats.unshift(c); saveChats(); syncNative();
+  connectTopic(topic); loadHistory(topic); renderChats(); updateTabBadge();
+  setTimeout(()=>openChat(topic),300);
+}
+function showInvite(c, opts){
+  opts=opts||{};
+  let link = (location.protocol.indexOf("http")===0 ? location.origin+location.pathname : "https://15816563131.github.io/family-chat-app/") + "?invite=" + c.topic;
+  if(opts.private && myName) link += "&n=" + encodeURIComponent(myName);
+  const title = opts.private ? "邀请好友私聊" : "邀请家人加入";
+  const tip = opts.private ? `把下面任一项发给「${escapeHtml(c.name)}」，TA 扫码/输入即可和你一对一私聊` : `把下面任一项发给家人，他们即可加入「${escapeHtml(c.name)}」`;
   dialogCard(`
-    <div class="ct">邀请家人加入</div>
-    <div class="cb">把下面任一项发给家人，他们即可加入「${escapeHtml(c.name)}」</div>
+    <div class="ct">${title}</div>
+    <div class="cb">${tip}</div>
     <div class="qr-wrap"><div class="qr-box" id="invQr"></div><div class="qr-tip">用家人手机扫码即可加入</div></div>
     <div class="codebox" id="invCode">${escapeHtml(c.topic)}</div>
     <div class="linkbox" id="invLink">${escapeHtml(link)}</div>
