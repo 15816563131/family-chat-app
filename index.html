@@ -138,6 +138,15 @@
   .bubble.img::before{display:none}
   .bubble.img img{display:block;max-width:160px;max-height:180px;border-radius:8px}
   .bubble.img .img-expired{font-size:12px;color:#999;padding:8px;line-height:1.4}
+  /* 语音消息气泡 */
+  .bubble.voice{display:flex;align-items:center;gap:10px;min-width:120px;max-width:62%}
+  .bubble.voice::before{display:none}
+  .voice-play{width:30px;height:30px;border-radius:50%;background:var(--wx-green);color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;cursor:pointer;flex:0 0 auto}
+  .row.me .voice-play{background:#fff;color:var(--wx-green)}
+  .voice-dur{font-size:14px;color:#333}
+  .row.me .voice-dur{color:#fff}
+  .composer .ic.recording{color:#e64340;animation:vcpulse 1s infinite}
+  @keyframes vcpulse{0%{opacity:1}50%{opacity:.35}100%{opacity:1}}
   /* 通讯录分组标题 */
   .group-title{padding:8px 14px;font-size:12px;color:#9a9a9a;background:var(--wx-bg)}
   /* 我 */
@@ -467,6 +476,7 @@ body::after{width:40vw;height:40vw;right:-6vw;top:8vw;background:radial-gradient
     <div class="emoji-panel" id="emojiPanel"></div>
     <div class="sel-bar" id="selBar"><span id="selCount">已选 0 条</span><div class="sel-acts"><span id="selFwd">转发</span><span id="selFav">收藏</span><span id="selDel">删除</span><span id="selCancel">取消</span></div></div>
     <form class="composer" id="form">
+      <div class="ic" id="micBtn" title="语音消息">🎤</div>
       <div class="ic" id="imgBtn" title="发送图片">🖼</div>
       <div class="ic" id="emojiBtn">😊</div>
       <textarea id="text" rows="1" placeholder="发送消息…" disabled></textarea>
@@ -912,10 +922,17 @@ function handleIncoming(topic, m, fromHistory){
   if(recallTag){ recallMessage(topic, recallTag.slice("recall_".length)); return; }
   // 打字指示器（仅实时消息，历史回放忽略）
   if(tags.includes("typing") && !fromHistory){ showTyping(topic, m.title||"对方"); return; }
-  // 图片/表情（ntfy 附件）
+  // 图片/表情/语音（ntfy 附件）
   if(m.attachment && m.attachment.url){
-    addLocalMsg(topic, {id:m.id, sender, name:m.title||"对方", text:"", img:m.attachment.url, w:0, h:0, time:(m.time||Date.now()/1000), self:false, type:"image"}, {silentUnread:false});
-    tryUpgradeAttachment(topic, m.id, m.attachment.url);
+    const at=m.attachment; const nm=(at.name||"");
+    if(nm.indexOf("voice-")===0){
+      const dm=nm.match(/^voice-(\d+)\./); const dur=dm?parseInt(dm[1],10):0;
+      addLocalMsg(topic, {id:m.id, sender, name:m.title||"对方", text:"", voice:at.url, dur, time:(m.time||Date.now()/1000), self:false, type:"voice"}, {silentUnread:false});
+      tryUpgradeAttachment(topic, m.id, at.url, "voice");
+    } else {
+      addLocalMsg(topic, {id:m.id, sender, name:m.title||"对方", text:"", img:at.url, w:0, h:0, time:(m.time||Date.now()/1000), self:false, type:"image"}, {silentUnread:false});
+      tryUpgradeAttachment(topic, m.id, at.url, "image");
+    }
     if(!fromHistory) playNewMsgCue(topic);
     return;
   }
@@ -978,7 +995,7 @@ function addLocalMsg(topic, msg, opts){
 
   const chat=getChat(topic);
   if(chat){
-    chat.lastMsg = (msg.type==="pat") ? msg.text : (msg.type==="image") ? ((msg.self?"":msg.name+": ")+"[图片]") : (msg.merge ? ((msg.self?"":msg.name+": ")+"[聊天记录]") : ((msg.self?"":msg.name+": ")+msg.text));
+    chat.lastMsg = (msg.type==="pat") ? msg.text : (msg.type==="voice") ? ((msg.self?"":msg.name+": ")+"[语音]") : (msg.type==="image") ? ((msg.self?"":msg.name+": ")+"[图片]") : (msg.merge ? ((msg.self?"":msg.name+": ")+"[聊天记录]") : ((msg.self?"":msg.name+": ")+msg.text));
     chat.lastTime = msg.time;
     const visibleNow = (topic===activeTopic && !document.hidden);
     if(!opts.silentUnread && !visibleNow) chat.unread=(chat.unread||0)+1;
@@ -1034,12 +1051,81 @@ async function sendImageMsg(topic, dataURL, w, h){
     const subs=lsGet("fc_subs_"+topic, []); for(const s of subs){ if(window.FC_PUSH) FC_PUSH.sendPush(s, {title:name, body:"[图片]"}).catch(()=>{}); }
   }catch(e){ updateMsgStatus(topic, id, "failed"); toast("发送失败，点击重发"); }
 }
+function dataURLToBlob(d){
+  try{ const i=d.indexOf(","); const meta=d.slice(0,i); const mime=(meta.match(/:(.*?);/)||[])[1]||"audio/webm"; const bin=atob(d.slice(i+1)); const arr=new Uint8Array(bin.length); for(let j=0;j<bin.length;j++) arr[j]=bin.charCodeAt(j); return new Blob([arr],{type:mime}); }catch(e){ return null; }
+}
+let _rec=null;
+function startVoice(){
+  if(!activeTopic){ toast("请先进入一个聊天"); return; }
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ toast("当前环境不支持录音"); return; }
+  navigator.mediaDevices.getUserMedia({audio:true}).then(stream=>{
+    _rec={stream, chunks:[], start:Date.now(), mr:new MediaRecorder(stream)};
+    _rec.mr.ondataavailable=e=>{ if(e.data && e.data.size) _rec.chunks.push(e.data); };
+    _rec.mr.onstop=onVoiceStop;
+    _rec.mr.start();
+    const mb=$("micBtn"); if(mb){ mb.classList.add("recording"); mb.textContent="■"; }
+    toast("录音中… 再次点击麦克风发送");
+  }).catch(e=>{ toast("无法录音："+(e&&e.name||e)); });
+}
+function stopVoice(){ if(_rec && _rec.mr && _rec.mr.state!=="inactive"){ try{ _rec.mr.stop(); }catch(e){} } }
+function onVoiceStop(){
+  const r=_rec; _rec=null;
+  const mb=$("micBtn"); if(mb){ mb.classList.remove("recording"); mb.textContent="🎤"; }
+  if(!r) return;
+  try{ r.stream.getTracks().forEach(t=>t.stop()); }catch(e){}
+  const dur=Math.max(1, Math.round((Date.now()-r.start)/1000));
+  if(dur<1){ toast("录音太短"); return; }
+  const blob=new Blob(r.chunks,{type:(r.mr.mimeType||"audio/webm")});
+  const rd=new FileReader();
+  rd.onload=()=>{ sendVoiceMsg(activeTopic, rd.result, blob.type, dur); };
+  rd.onerror=()=>toast("处理失败");
+  rd.readAsDataURL(blob);
+}
+async function sendVoiceMsg(topic, dataURL, mime, dur){
+  if(!dataURL) return;
+  const name=myName||"我";
+  const id="local-"+Date.now()+"-"+Math.random().toString(36).slice(2,6);
+  addLocalMsg(topic, {id, sender:uid, name, voice:dataURL, dur, time:Date.now()/1000, self:true, type:"voice", status:"sending"}, {silentUnread:true});
+  try{
+    const blob=dataURLToBlob(dataURL); if(!blob) throw new Error("enc");
+    await fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":name, "Tags":uid, "Priority":"3", "Content-Type":mime||"audio/webm", "X-Filename":"voice-"+dur+".webm" }, body:blob});
+    updateMsgStatus(topic, id, "delivered");
+    const subs=lsGet("fc_subs_"+topic, []); for(const s of subs){ if(window.FC_PUSH) FC_PUSH.sendPush(s, {title:name, body:"[语音]"}).catch(()=>{}); }
+  }catch(e){ updateMsgStatus(topic, id, "failed"); toast("发送失败，点击重发"); }
+}
+function voiceBubble(m){
+  const row=document.createElement("div"); row.className="row "+(m.self?"me":"other"); row.dataset.id=m.id;
+  if(selectMode && selected.has(m.id)) row.classList.add("selected");
+  const c=activeTopic?getChat(activeTopic):null;
+  const av=document.createElement("div"); av.className="av";
+  av.style.background = m.self? "#07C160" : (c?c.color:colorFrom(m.sender||m.name));
+  av.textContent = avatarText(m.self?(myName||"我"):(m.name||"对方"));
+  const b=document.createElement("div"); b.className="bubble voice";
+  const play=document.createElement("div"); play.className="voice-play"; play.textContent="▶";
+  const dur=document.createElement("div"); dur.className="voice-dur"; dur.textContent=(m.dur||0)+"″";
+  b.appendChild(play); b.appendChild(dur);
+  play.onclick=()=>{ try{ const a=new Audio(m.voice); a.play(); play.textContent="⏸"; a.onended=()=>{ play.textContent="▶"; }; }catch(e){ toast("无法播放"); } };
+  row.appendChild(av); row.appendChild(b);
+  if(m.self){
+    const st=document.createElement("div"); st.className="st"+(m.status==="failed"?" fail":"")+(m.read?" read":"");
+    let label=""; if(m.status==="sending") label="⏳"; else if(m.status==="failed") label="⚠ 重发"; else if(m.read) label="已读"; else if(m.status==="delivered") label="已送达";
+    st.textContent=label; if(m.status==="failed") st.onclick=()=>retrySend(activeTopic, m.id); row.appendChild(st);
+  }
+  attachLongPress(row, ()=>showMsgMenu(m));
+  return row;
+}
+$("micBtn").onclick=()=>{ if(_rec) stopVoice(); else startVoice(); };
 function retrySend(topic, id){
   const msgs=getMsgs(topic); const m=msgs.find(x=>x.id===id); if(!m) return;
   updateMsgStatus(topic, id, "sending");
   if(m.type==="image" && m.img && m.img.indexOf("data:")===0){
     const bin=dataURLToBytes(m.img);
     if(bin){ fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":myName||"我", "Tags":uid, "Priority":"3", "Content-Type":"image/jpeg", "X-Filename":"sticker.jpg" }, body:bin})
+      .then(()=>updateMsgStatus(topic, id, "delivered")).catch(()=>updateMsgStatus(topic, id, "failed")); return; }
+  }
+  if(m.type==="voice" && m.voice && m.voice.indexOf("data:")===0){
+    const blob=dataURLToBlob(m.voice);
+    if(blob){ fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":myName||"我", "Tags":uid, "Priority":"3", "Content-Type":(blob.type||"audio/webm"), "X-Filename":"voice-"+(m.dur||0)+".webm" }, body:blob})
       .then(()=>updateMsgStatus(topic, id, "delivered")).catch(()=>updateMsgStatus(topic, id, "failed")); return; }
   }
   fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":myName||"我", "Tags":uid, "Priority":"3" }, body:m.text})
@@ -1184,6 +1270,7 @@ function renderChatFull(topic){
 function bubbleEl(m){
   if(m.type==="pat"||m.type==="sysrec"){ return patLineEl(m.text); }
   if(m.type==="image"){ return imageBubble(m); }
+  if(m.type==="voice"){ return voiceBubble(m); }
   if(m.merge){ return mergeBubble(m); }
   const row=document.createElement("div"); row.className="row "+(m.self?"me":"other"); row.dataset.id=m.id;
   if(selectMode && selected.has(m.id)) row.classList.add("selected");
@@ -1265,10 +1352,10 @@ function imageBubble(m){
   attachLongPress(row, ()=>showMsgMenu(m));
   return row;
 }
-// 收到附件图片后，尽量抓回本地 dataURL 以便长期可见（ntfy 附件会过期）
-function tryUpgradeAttachment(topic, id, url){
+// 收到附件（图片/语音）后，尽量抓回本地 dataURL 以便长期可见（ntfy 附件会过期）
+function tryUpgradeAttachment(topic, id, url, kind){
   try{
-    fetch(url).then(r=>{ if(!r.ok) throw 0; return r.blob(); }).then(b=>{ const rd=new FileReader(); rd.onload=()=>{ const url2=rd.result; const msgs=getMsgs(topic); const x=msgs.find(z=>z.id===id); if(x){ x.img=url2; setMsgs(topic, msgs); if(topic===activeTopic) renderChatFull(topic); } }; rd.readAsDataURL(b); }).catch(()=>{});
+    fetch(url).then(r=>{ if(!r.ok) throw 0; return r.blob(); }).then(b=>{ const rd=new FileReader(); rd.onload=()=>{ const url2=rd.result; const msgs=getMsgs(topic); const x=msgs.find(z=>z.id===id); if(x){ if(kind==="voice") x.voice=url2; else x.img=url2; setMsgs(topic, msgs); if(topic===activeTopic) renderChatFull(topic); } }; rd.readAsDataURL(b); }).catch(()=>{});
   }catch(e){}
 }
 
