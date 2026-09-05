@@ -220,6 +220,20 @@
   [data-theme="dark"] .pin-bar{background:#3a3320;color:#d8c9a0}
   /* 已读回执 */
   .row.me .st.read{color:var(--wx-muted)}
+  /* 大表情（单/少量 emoji 放大显示） */
+  .bubble.big-emoji{background:transparent!important;font-size:46px;line-height:1.25;padding:2px 2px;max-width:62%;box-shadow:none}
+  .bubble.big-emoji::before{display:none}
+  .row.other .bubble.big-emoji{background:transparent!important}
+  /* 引用块可点击定位原消息 */
+  .bubble .quote{cursor:pointer}
+  /* 以下为新消息 分割线 */
+  .divider.newdiv{color:var(--wx-red);font-weight:600}
+  /* 聊天背景预设 */
+  #chatScreen.bg-default, #messages.bg-default{background:var(--wx-bg)}
+  #chatScreen.bg-green, #messages.bg-green{background:#e6f4ea}
+  #chatScreen.bg-blue, #messages.bg-blue{background:#e7f0fb}
+  #chatScreen.bg-paper, #messages.bg-paper{background:#f3ecd9}
+  #chatScreen.bg-dark, #messages.bg-dark{background:#1a1a1a}
 </style>
 </head>
 <body>
@@ -289,6 +303,7 @@
         <div class="mi" id="darkMode"><span>深色模式</span><span><span class="v" id="darkV">跟随系统</span><span class="chev">›</span></span></div>
         <div class="mi" id="fontSize"><span>字体大小</span><span><span class="v" id="fontV">标准</span><span class="chev">›</span></span></div>
         <div class="mi" id="favs"><span>我的收藏</span><span><span class="v" id="favV">0</span><span class="chev">›</span></span></div>
+        <div class="mi" id="chatBg"><span>聊天背景</span><span><span class="v" id="bgV">默认</span><span class="chev">›</span></span></div>
         <div class="mi" id="clearAll"><span>清空所有聊天记录</span><span><span class="chev">›</span></span></div>
         <div class="mi" id="about"><span>关于家聊</span><span><span class="chev">›</span></span></div>
       </div>
@@ -367,6 +382,16 @@ function getLast(t){ return lsGet(lastKey(t), 1); }
 
 // ---------- 工具 ----------
 function escapeHtml(s){ return (s||"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+// 是否为「大表情」：纯 emoji 且 1~3 个（微信式贴纸放大显示）
+function isBigEmoji(text){
+  if(!text) return false;
+  const t=text.trim();
+  if(!t) return false;
+  const cps=[...t];
+  if(cps.length<1 || cps.length>3) return false;
+  const ranges=[[0x2190,0x21FF],[0x2300,0x27BF],[0x2B00,0x2BFF],[0x2600,0x26FF],[0x2700,0x27BF],[0x1F000,0x1FAFF],[0xFE00,0xFE0F]];
+  return cps.every(c=>{ const cp=c.codePointAt(0); if(cp===0x200D||cp===0x20E3) return true; return ranges.some(([a,b])=>cp>=a&&cp<=b); });
+}
 function fmtTime(ts){
   ts = ts*1000;
   const d = new Date(ts), now = new Date();
@@ -635,7 +660,10 @@ function openChat(topic){
   searchInChat=""; renderSearchBanner();
   $("chatTitle").textContent = c.name;
   renderPin();
+  newMsgFrom = c.lastSeen||0;
+  showNewDivider = hadUnread && newMsgFrom>0;
   renderChatFull(topic);
+  const _lm=getMsgs(topic); const _lastm=_lm[_lm.length-1]; c.lastSeen = _lastm?_lastm.time:Date.now()/1000; saveChats();
   showScreen("chatScreen");
   $("text").disabled=false; $("sendBtn").disabled=false;
   if(hadUnread) sendRead(topic);
@@ -649,10 +677,14 @@ function renderChatFull(topic){
   if(searchInChat){ msgs=msgs.filter(m=>(m.text||"").toLowerCase().includes(searchInChat)); }
   let prev=null;
   msgs.forEach(m=>{
+    if(showNewDivider && newMsgFrom>0 && prev && prev.time<=newMsgFrom && m.time>newMsgFrom){
+      const nd=document.createElement("div"); nd.className="divider newdiv"; nd.textContent="以下为新消息"; box.appendChild(nd);
+    }
     if(needDivider(prev,m)){ const d=document.createElement("div"); d.className="divider"; d.textContent=fmtDivider(m.time); box.appendChild(d); }
     box.appendChild(bubbleEl(m));
     prev=m;
   });
+  showNewDivider=false;
   newCount=0; updateJumpBadge(); const jb=$("jumpLatest"); if(jb) jb.classList.remove("show"); atBottom=true;
   scrollBottom();
 }
@@ -666,7 +698,10 @@ function bubbleEl(m){
   const b=document.createElement("div"); b.className="bubble";
   if(m.quote){ const q=document.createElement("div"); q.className="quote";
     q.innerHTML='<div class="qn">'+escapeHtml(m.quote.name||"")+'</div><div class="qt">'+highlightAt(escapeHtml(m.quote.text||""))+'</div>';
+    if(m.quote.i){ q.dataset.qid=m.quote.i; q.onclick=()=>{ const el=document.querySelector('#messages .row[data-id="'+m.quote.i+'"]'); if(el) el.scrollIntoView({block:"center"}); else toast("原消息已不可见"); }; }
     b.appendChild(q); }
+  const isBig = !m.quote && isBigEmoji(m.text||"");
+  if(isBig) b.classList.add("big-emoji");
   const tx=document.createElement("div"); tx.innerHTML=highlightAt(escapeHtml(m.text||"")); b.appendChild(tx);
   row.appendChild(av); row.appendChild(b);
   av.addEventListener("dblclick",(e)=>{ e.preventDefault(); doPat(m.self?(myName||"我"):(m.name||"对方")); });
@@ -707,7 +742,7 @@ function parseQuote(body){
 }
 function embedQuote(body, quote){
   if(!quote) return body;
-  return "\u0001Q"+JSON.stringify({n:quote.name||"", t:quote.text||""})+"\u0001"+body;
+  return "\u0001Q"+JSON.stringify({i:quote.id||"", n:quote.name||"", t:quote.text||""})+"\u0001"+body;
 }
 
 // 长按（触摸/鼠标）触发回调
@@ -745,7 +780,7 @@ function showMsgMenu(m){
 
 // 引用回复
 function doReply(m){
-  replyingTo = {name:m.name||"对方", text:m.text||""};
+  replyingTo = {id:m.id, name:m.name||"对方", text:m.text||""};
   const qb=$("quoteBar"), qt=$("qbText");
   qt.textContent = (m.name||"对方") + "：" + (m.text||"");
   qb.classList.add("show");
@@ -854,7 +889,7 @@ function appendBubble(m){
   if(needDivider(prev,m)){ const d=document.createElement("div"); d.className="divider"; d.textContent=fmtDivider(m.time); box.appendChild(d); }
   box.appendChild(bubbleEl(m));
 }
-let atBottom=true, newCount=0;
+let atBottom=true, newCount=0, newMsgFrom=0, showNewDivider=false;
 function scrollBottom(){ const b=$("messages"); b.scrollTop=b.scrollHeight; }
 function isAtBottom(){ const b=$("messages"); return b.scrollHeight - b.scrollTop - b.clientHeight < 40; }
 function updateJumpBadge(){ const b=$("jumpNew"); if(!b) return; if(newCount>0){ b.style.display="flex"; b.textContent=newCount>99?"99+":newCount; } else b.style.display="none"; }
@@ -1006,6 +1041,15 @@ $("fontSize").onclick=()=>{
   ]);
 };
 $("favs").onclick=openFavs;
+
+// 聊天背景
+const BG_PRESETS=[{k:"default",n:"默认"},{k:"green",n:"浅绿"},{k:"blue",n:"浅蓝"},{k:"paper",n:"羊皮纸"},{k:"dark",n:"暗夜"}];
+function applyBg(){
+  const bg=localStorage.getItem("fc_bg")||"default";
+  const bv=$("bgV"); if(bv) bv.textContent=(BG_PRESETS.find(p=>p.k===bg)||{}).n||"默认";
+  ["chatScreen","messages"].forEach(id=>{ const e=$(id); if(e){ e.classList.remove("bg-default","bg-green","bg-blue","bg-paper","bg-dark"); e.classList.add("bg-"+bg); } });
+}
+$("chatBg").onclick=()=>{ const cur=localStorage.getItem("fc_bg")||"default"; openSheet(BG_PRESETS.map(p=>({label:(cur===p.k?"✓ ":"")+p.n, fn:()=>{ localStorage.setItem("fc_bg",p.k); applyBg(); }}))); };
 
 // 表情
 const EMOJIS="😀 😁 😂 🤣 😊 😍 😘 😎 🤔 😅 😭 😡 👍 👎 👌 🙏 💪 ❤️ 💔 🎉 🔥 ✨ 🌹 🍺 🍎 🐶 🐱 🌟 😴 🤝 💡 ⚽ 🎁 ☕ 🌈 😉 😢 😏 😜 🥰 😇 🤩 🥳 😤 🤯 🙄 😬 🤤 😋 😴 🤗 🤭 🫡 🤝 👏 🙌 👋 🤙 💯 ✅ 🆗 🈶 🈚 💢 💥 💫 ⭐ 🌟 💎 🔔 📣 📱 💬 📷 🎬 🎵 🍻 🍜 🍔 🍟 🌭 🍿 🍰 🍩 🍪 🍉 🍓 🍑 🥑 🌻 🌈 ☀️ 🌙 ⛅ ☁️ ❄️ 💧 🔥".split(" ");
@@ -1196,6 +1240,7 @@ function afterName(){
   checkInvite();
   applyTheme();
   applyFont();
+  applyBg();
   renderChats(); renderMe(); updateTabBadge();
   const mb=$("messages"); if(mb) mb.addEventListener("scroll", onMsgScroll);
   connectAll(); syncNative();
