@@ -15,6 +15,7 @@
     --tab-h:54px; --header-h:48px;
     --safe-b:env(safe-area-inset-bottom,0px);
     --wx-card:#ffffff; --wx-panel:#f2f2f2; --wx-input:#e3e3e3; --wx-active:#ececec;
+    --msg-font:15px;
   }
   [data-theme="dark"]{
     --wx-bg:#0f0f0f; --wx-self:#2b6a4f; --wx-other:#2a2a2a;
@@ -95,7 +96,7 @@
   .row.me{flex-direction:row-reverse}
   .row .av{width:38px;height:38px;border-radius:6px;flex:0 0 auto;color:#fff;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:600}
   .row .bubble{
-    max-width:68%;margin:0 10px;padding:9px 12px;font-size:15px;line-height:1.45;border-radius:6px;
+    max-width:68%;margin:0 10px;padding:9px 12px;font-size:var(--msg-font,15px);line-height:1.45;border-radius:6px;
     position:relative;word-break:break-word;white-space:pre-wrap;
   }
   .row.other .bubble{background:var(--wx-other)}
@@ -169,6 +170,25 @@
   .toast{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,.78);color:#fff;padding:10px 18px;border-radius:8px;font-size:14px;z-index:60;display:none;max-width:80%;text-align:center}
   .toast.show{display:block}
   .statusbar{position:absolute;top:0;left:0;right:0;height:0;z-index:9}
+  /* 发送状态 / @ / 打字 / 搜索 / 字体 */
+  .row.me .st{align-self:center;margin:0 6px;font-size:12px;color:#9a9a9a;cursor:default;flex:0 0 auto}
+  .row.me .st.fail{color:var(--wx-red);cursor:pointer}
+  .at{color:#576b95;font-weight:600}
+  .at.me{color:var(--wx-red)}
+  .typing-bar{height:24px;display:none;align-items:center;justify-content:center;font-size:12px;color:var(--wx-muted);background:var(--wx-bg);flex:0 0 auto}
+  .typing-bar.show{display:flex}
+  .typing-bar .dot{display:inline-block;width:4px;height:4px;border-radius:50%;background:var(--wx-muted);margin:0 2px;animation:blink 1s infinite}
+  .typing-bar .dot:nth-child(2){animation-delay:.2s}
+  .typing-bar .dot:nth-child(3){animation-delay:.4s}
+  @keyframes blink{0%,60%,100%{opacity:.3}30%{opacity:1}}
+  .at-pop{position:absolute;left:8px;right:8px;bottom:56px;max-height:190px;overflow:auto;background:var(--wx-card);border:1px solid var(--wx-line);border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.25);display:none;z-index:15}
+  .at-pop.show{display:block}
+  .at-pop div{padding:11px 14px;font-size:15px;cursor:pointer;border-bottom:1px solid var(--wx-line)}
+  .at-pop div:last-child{border-bottom:none}
+  .at-pop div:active{background:var(--wx-active)}
+  .search-banner{display:none;align-items:center;justify-content:space-between;padding:7px 14px;background:#d9e6f7;color:#3a6ea5;font-size:13px;flex:0 0 auto}
+  .search-banner.show{display:flex}
+  .search-banner .clear{cursor:pointer;font-weight:600}
 </style>
 </head>
 <body>
@@ -200,7 +220,10 @@
       <div class="title" id="chatTitle">聊天</div>
       <div class="right action" id="chatMore">···</div>
     </div>
+    <div class="typing-bar" id="typingBar"><span id="typingName">对方</span> 正在输入<span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+    <div class="search-banner" id="searchBanner"><span id="searchInfo">搜索</span><span class="clear" id="searchClear">清除</span></div>
     <div class="messages" id="messages"></div>
+    <div class="at-pop" id="atPop"></div>
     <div class="emoji-panel" id="emojiPanel"></div>
     <form class="composer" id="form">
       <div class="ic" id="emojiBtn">😊</div>
@@ -230,6 +253,7 @@
         <div class="mi" id="setName"><span>昵称</span><span><span class="v" id="setNameV">我</span><span class="chev">›</span></span></div>
         <div class="mi" id="openNotif"><span>新消息通知</span><span><span class="v" id="notifV">开启</span><span class="chev">›</span></span></div>
         <div class="mi" id="darkMode"><span>深色模式</span><span><span class="v" id="darkV">跟随系统</span><span class="chev">›</span></span></div>
+        <div class="mi" id="fontSize"><span>字体大小</span><span><span class="v" id="fontV">标准</span><span class="chev">›</span></span></div>
         <div class="mi" id="clearAll"><span>清空所有聊天记录</span><span><span class="chev">›</span></span></div>
         <div class="mi" id="about"><span>关于家聊</span><span><span class="chev">›</span></span></div>
       </div>
@@ -371,12 +395,16 @@ function handleIncoming(topic, m, fromHistory){
     try{ const s=JSON.parse(m.message); if(s&&s.endpoint){ const arr=lsGet("fc_subs_"+topic,[]); arr.push(s); lsSet("fc_subs_"+topic, dedupeSubs(arr)); } }catch(e){}
     return;
   }
-  // 撤回控制消息：tags 含 recall_<id>
-  const recallTag = (tags||[]).find(t=>typeof t==="string" && t.indexOf("recall_")===0);
-  if(recallTag){ recallMessage(topic, recallTag.slice("recall_".length)); return; }
   const sender = (tags&&tags[0])||"";
-  if(sender===uid) return; // 跳过自己
-  addLocalMsg(topic, {id:m.id, sender, name:m.title||"对方", text:m.message||"", time:(m.time||Date.now()/1000), self:false}, {silentUnread:false});
+  if(sender===uid) return; // 跳过自己（含撤回/打字回声）
+  // 撤回控制消息：tags 含 recall_<id>
+  const recallTag = tags.find(t=>typeof t==="string" && t.indexOf("recall_")===0);
+  if(recallTag){ recallMessage(topic, recallTag.slice("recall_".length)); return; }
+  // 打字指示器（仅实时消息，历史回放忽略）
+  if(tags.includes("typing") && !fromHistory){ showTyping(topic, m.title||"对方"); return; }
+  const text = m.message||"";
+  const mentioned = !!myName && myName.length>0 && text.indexOf("@"+myName) >= 0;
+  addLocalMsg(topic, {id:m.id, sender, name:m.title||"对方", text, time:(m.time||Date.now()/1000), self:false, mentioned}, {silentUnread:false});
 }
 
 // 撤回：从本地存储移除该条消息，并刷新视图
@@ -396,6 +424,16 @@ function recallMessage(topic, msgId){
   if(topic===activeTopic) renderChatFull(topic);
   renderChats();
 }
+
+let typingHideTimer=null;
+function showTyping(topic, name){
+  if(topic!==activeTopic) return;
+  const bar=$("typingBar"); if($("typingName")) $("typingName").textContent=name||"对方";
+  bar.classList.add("show");
+  clearTimeout(typingHideTimer);
+  typingHideTimer=setTimeout(()=>bar.classList.remove("show"), 4000);
+}
+
 function dedupeSubs(arr){
   const seen={}; const out=[];
   arr.forEach(s=>{ if(s&&s.endpoint&&!seen[s.endpoint]){ seen[s.endpoint]=1; out.push(s);} });
@@ -417,6 +455,7 @@ function addLocalMsg(topic, msg, opts){
     chat.lastTime = msg.time;
     const visibleNow = (topic===activeTopic && !document.hidden);
     if(!opts.silentUnread && !visibleNow) chat.unread=(chat.unread||0)+1;
+    if(!msg.self && msg.mentioned && !visibleNow) chat.atMe=true;
     chat.order=Date.now();
     saveChats();
   }
@@ -432,13 +471,28 @@ function addLocalMsg(topic, msg, opts){
 async function sendMessage(topic, text){
   text=(text||"").trim(); if(!text) return;
   const name = myName || "我";
+  const id = "local-"+Date.now()+"-"+Math.random().toString(36).slice(2,6);
+  addLocalMsg(topic, {id, sender:uid, name, text, time:Date.now()/1000, self:true, status:"sending"}, {silentUnread:true});
   try{
     await fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":name, "Tags":uid, "Priority":"3" }, body:text});
-    addLocalMsg(topic, {id:"local-"+Date.now()+"-"+Math.random().toString(36).slice(2,6), sender:uid, name, text, time:Date.now()/1000, self:true}, {silentUnread:true});
+    updateMsgStatus(topic, id, "sent");
     // 给在线订阅者推 Web Push（页面关闭也能收）
     const subs = lsGet("fc_subs_"+topic, []);
     for(const s of subs){ if(window.FC_PUSH) FC_PUSH.sendPush(s, {title:name, body:text}).catch(()=>{}); }
-  }catch(e){ toast("发送失败，请检查网络"); }
+  }catch(e){ updateMsgStatus(topic, id, "failed"); toast("发送失败，点击重发"); }
+}
+
+function updateMsgStatus(topic, id, status){
+  const msgs=getMsgs(topic); const m=msgs.find(x=>x.id===id);
+  if(!m) return; m.status=status; setMsgs(topic, msgs);
+  if(topic===activeTopic) renderChatFull(topic);
+}
+function retrySend(topic, id){
+  const msgs=getMsgs(topic); const m=msgs.find(x=>x.id===id); if(!m) return;
+  updateMsgStatus(topic, id, "sending");
+  fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":myName||"我", "Tags":uid, "Priority":"3" }, body:m.text})
+    .then(()=>updateMsgStatus(topic, id, "sent"))
+    .catch(()=>updateMsgStatus(topic, id, "failed"));
 }
 
 // ---------- 渲染：会话列表 ----------
@@ -457,7 +511,7 @@ function renderChats(){
     const it=document.createElement("div"); it.className="item";
     const av=document.createElement("div"); av.className="avatar"; av.style.background=c.color; av.textContent=avatarText(c.name);
     const mid=document.createElement("div"); mid.className="mid";
-    const nm=document.createElement("div"); nm.className="name"; nm.textContent=c.name + (c.mute?" 🔕":"") + (c.pinned?" 📌":"");
+    const nm=document.createElement("div"); nm.className="name"; nm.textContent=c.name + (c.atMe?" ［有人@我］":"") + (c.mute?" 🔕":"") + (c.pinned?" 📌":"");
     const pv=document.createElement("div"); pv.className="preview"; pv.textContent=c.lastMsg||"";
     mid.appendChild(nm); mid.appendChild(pv);
     const rc=document.createElement("div"); rc.className="rightcol";
@@ -508,7 +562,8 @@ let activeTopic = null;
 function openChat(topic){
   const c=getChat(topic); if(!c) return;
   activeTopic=topic;
-  c.unread=0; saveChats(); renderChats(); updateTabBadge();
+  c.unread=0; c.atMe=false; saveChats(); renderChats(); updateTabBadge();
+  searchInChat=""; renderSearchBanner();
   $("chatTitle").textContent = c.name;
   renderChatFull(topic);
   showScreen("chatScreen");
@@ -519,7 +574,8 @@ function openChat(topic){
 }
 function renderChatFull(topic){
   const box=$("messages"); box.innerHTML="";
-  const msgs=getMsgs(topic);
+  let msgs=getMsgs(topic);
+  if(searchInChat){ msgs=msgs.filter(m=>(m.text||"").toLowerCase().includes(searchInChat)); }
   let prev=null;
   msgs.forEach(m=>{
     if(needDivider(prev,m)){ const d=document.createElement("div"); d.className="divider"; d.textContent=fmtDivider(m.time); box.appendChild(d); }
@@ -534,10 +590,26 @@ function bubbleEl(m){
   const av=document.createElement("div"); av.className="av";
   av.style.background = m.self? "#07C160" : (c?c.color:colorFrom(m.sender||m.name));
   av.textContent = avatarText(m.self?(myName||"我"):(m.name||"对方"));
-  const b=document.createElement("div"); b.className="bubble"; b.innerHTML=escapeHtml(m.text);
+  const b=document.createElement("div"); b.className="bubble"; b.innerHTML=highlightAt(escapeHtml(m.text));
   row.appendChild(av); row.appendChild(b);
+  // 自己消息的发送状态（发送中/失败重发）
+  if(m.self){
+    const st=document.createElement("div"); st.className="st"+(m.status==="failed"?" fail":"");
+    st.textContent = m.status==="sending"?"⏳" : (m.status==="failed"?"⚠ 重发":"");
+    if(m.status==="failed") st.onclick=()=>retrySend(activeTopic, m.id);
+    row.appendChild(st);
+  }
   attachLongPress(row, ()=>showMsgMenu(m));
   return row;
+}
+
+// 高亮 @名字（@自己 用红色）
+function highlightAt(html){
+  if(!html) return html;
+  return html.replace(/@([^\s@，。、！？,!?]{1,20})/g, (full, name)=>{
+    const me = (myName && name===myName);
+    return '<span class="at'+(me?' me':'')+'">@'+name+'</span>';
+  });
 }
 
 // 长按（触摸/鼠标）触发回调
@@ -638,11 +710,89 @@ $("searchInput").oninput=(e)=>{ searchKw=e.target.value.trim(); renderChats(); }
 const form=$("form");
 form.addEventListener("submit",(e)=>{
   e.preventDefault();
-  const ta=$("text"); const v=ta.value; ta.value=""; autoGrow(ta);
+  const ta=$("text"); const v=ta.value; ta.value=""; autoGrow(ta); hideAtPicker();
   if(activeTopic) sendMessage(activeTopic, v);
 });
-$("text").addEventListener("input",(e)=>autoGrow(e.target));
+$("text").addEventListener("input",(e)=>{ autoGrow(e.target); onComposerInput(e.target); });
+$("text").addEventListener("blur",()=>setTimeout(hideAtPicker,200));
 function autoGrow(ta){ ta.style.height="auto"; ta.style.height=Math.min(ta.scrollHeight,90)+"px"; }
+
+// 打字指示器广播（节流）
+let lastTyping=0;
+function sendTyping(){
+  if(!activeTopic) return;
+  const now=Date.now();
+  if(now-lastTyping < 2500) return;
+  lastTyping=now;
+  try{ fetch(BASE+"/"+activeTopic, {method:"POST", headers:{ "Title":myName||"我", "Tags":uid+",typing", "Priority":"min" }, body:"1"}); }catch(e){}
+}
+
+// @ 提醒选择器
+let atPickerNames=[];
+function onComposerInput(ta){
+  sendTyping();
+  const pos=ta.selectionStart||ta.value.length;
+  const before=ta.value.slice(0,pos);
+  const m=before.match(/@([^\s@，。、！？,!?]*)$/);
+  if(m){
+    const q=m[1].toLowerCase();
+    const names=knownNames(activeTopic).filter(n=>n.toLowerCase().indexOf(q)>=0).slice(0,8);
+    if(names.length){ showAtPicker(names, ta); } else hideAtPicker();
+  } else hideAtPicker();
+}
+function knownNames(topic){
+  const set={}; const out=[];
+  getMsgs(topic).forEach(x=>{ if(x.name && !x.self && x.name!==myName && !set[x.name]){ set[x.name]=1; out.push(x.name); } });
+  return out;
+}
+function showAtPicker(names, ta){
+  atPickerNames=names; const pop=$("atPop"); pop.innerHTML="";
+  names.forEach(n=>{ const d=document.createElement("div"); d.textContent=n; d.onclick=()=>insertAtName(n, ta); pop.appendChild(d); });
+  pop.classList.add("show");
+}
+function hideAtPicker(){ const pop=$("atPop"); if(pop) pop.classList.remove("show"); }
+function insertAtName(name, ta){
+  const pos=ta.selectionStart||ta.value.length;
+  const before=ta.value.slice(0,pos);
+  const after=ta.value.slice(pos);
+  const m=before.match(/@([^\s@，。、！？,!?]*)$/);
+  let start=m? before.length-m[0].length : before.length;
+  const nv=before.slice(0,start)+"@"+name+" "+after;
+  ta.value=nv;
+  const np=start+name.length+2;
+  ta.setSelectionRange(np,np);
+  ta.focus(); autoGrow(ta); hideAtPicker();
+}
+
+// 聊天内搜索
+let searchInChat="";
+function startChatSearch(){
+  promptDialog("搜索聊天记录","输入关键词：","",(kw)=>{
+    kw=(kw||"").trim(); if(!kw) return;
+    searchInChat=kw.toLowerCase(); renderChatFull(activeTopic); renderSearchBanner();
+  });
+}
+function renderSearchBanner(){
+  const b=$("searchBanner");
+  if(searchInChat){ $("searchInfo").textContent="搜索："+searchInChat+"（"+(getMsgs(activeTopic).filter(m=>(m.text||"").toLowerCase().includes(searchInChat)).length)+"条）"; b.classList.add("show"); }
+  else b.classList.remove("show");
+}
+$("searchClear").onclick=()=>{ searchInChat=""; renderChatFull(activeTopic); renderSearchBanner(); };
+
+// 字体大小
+let fontMode = localStorage.getItem("fc_font") || "std"; // std | lg | xl
+function applyFont(){
+  const map={std:"15px", lg:"17px", xl:"19px"};
+  document.documentElement.style.setProperty("--msg-font", map[fontMode]||"15px");
+  const fv=$("fontV"); if(fv) fv.textContent={std:"标准",lg:"大",xl:"特大"}[fontMode]||"标准";
+}
+$("fontSize").onclick=()=>{
+  openSheet([
+    {label:(fontMode==="std"?"✓ ":"")+"标准", fn:()=>{ fontMode="std"; localStorage.setItem("fc_font","std"); applyFont(); }},
+    {label:(fontMode==="lg"?"✓ ":"")+"大", fn:()=>{ fontMode="lg"; localStorage.setItem("fc_font","lg"); applyFont(); }},
+    {label:(fontMode==="xl"?"✓ ":"")+"特大", fn:()=>{ fontMode="xl"; localStorage.setItem("fc_font","xl"); applyFont(); }},
+  ]);
+};
 
 // 表情
 const EMOJIS="😀 😁 😂 🤣 😊 😍 😘 😎 🤔 😅 😭 😡 👍 👎 👌 🙏 💪 ❤️ 💔 🎉 🔥 ✨ 🌹 🍺 🍎 🐶 🐱 🌟 😴 🤝 💡 ⚽ 🎁 ☕ 🌈".split(" ");
@@ -661,6 +811,7 @@ $("chatMore").onclick=()=>{
     {label: c.mute ? "允许消息通知" : "消息免打扰", fn:()=>{ c.mute=!c.mute; saveChats(); syncNative(); toast(c.mute?"已免打扰":"已开启通知"); }},
     {label:"邀请家人加入", fn:()=>showInvite(c)},
     {label:"修改名称", fn:()=>renameChat(c)},
+    {label:"搜索聊天记录", fn:()=>startChatSearch()},
     {label:"清空聊天记录", danger:false, fn:()=>confirmDialog("清空聊天记录","将删除该会话的全部消息，确定？",()=>{ setMsgs(activeTopic,[]); c.lastMsg=""; c.lastTime=0; saveChats(); renderChatFull(activeTopic); renderChats(); toast("已清空"); })},
     {label:"删除会话", danger:true, fn:()=>confirmDialog("删除会话","将从列表中移除该聊天（消息仍保留在服务器），确定？",()=>{ deleteChat(activeTopic); })},
   ]);
@@ -821,6 +972,7 @@ function afterName(){
   $("splash").style.display="none";
   checkInvite();
   applyTheme();
+  applyFont();
   renderChats(); renderMe(); updateTabBadge();
   connectAll(); syncNative();
   // 通知权限
