@@ -1,9 +1,9 @@
 {
-  "name": "家庭聊天 · 免服务器版",
+  "name": "家聊 · 微信风格家庭聊天",
   "short_name": "家聊",
   "start_url": ".",
   "display": "standalone",
-  "background_color": "#f5f7fb",
-  "theme_color": "#185FA5",
-  "description": "基于 ntfy 公共中继的免服务器家庭聊天，后台也能收消息"
+  "background_color": "#ededed",
+  "theme_color": "#07C160",
+  "description": "免服务器家庭聊天，微信风格多会话，后台也能收消息"
 }
