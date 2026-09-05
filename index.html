@@ -1526,7 +1526,7 @@ $("clearAll").onclick=()=>confirmDialog("清空所有聊天记录","将删除全
   chats.forEach(c=>setMsgs(c.topic,[])); chats.forEach(c=>{c.lastMsg="";c.lastTime=0;}); saveChats();
   if(activeTopic) renderChatFull(activeTopic); renderChats(); toast("已清空");
 });
-$("about").onclick=()=>dialogCard(`<div class="ct">关于家聊</div><div class="cb">家聊 · 免服务器家庭聊天<br>消息经免费公共服务中转<br>后台/关闭也能收到通知<br><br>版本 v2.0（微信风格）</div><div class="cactions"><button id="dOk">好的</button></div>`), $("dOk").onclick=closeDialog;
+$("about").onclick=()=>{ dialogCard(`<div class="ct">关于家聊</div><div class="cb">家聊 · 免服务器家庭聊天<br>消息经免费公共服务中转<br>后台/关闭也能收到通知<br><br>版本 v2.0（微信风格）</div><div class="cactions"><button id="dOk">好的</button></div>`); $("dOk").onclick=closeDialog; };
 $("inviteFriend").onclick=()=>{
   const link=(location.protocol.indexOf("http")===0?location.origin+location.pathname:"https://15816563131.github.io/family-chat-app/");
   dialogCard(`<div class="ct">分享家聊</div><div class="cb">把链接发给家人，他们也能用浏览器或安装 APP 使用。</div><div class="linkbox" id="applink">${escapeHtml(link)}</div><div class="cactions"><button id="dCopyApp">复制链接</button></div>`);
