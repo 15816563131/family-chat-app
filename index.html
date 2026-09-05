@@ -140,7 +140,7 @@
   .menu .mi .v{color:var(--wx-muted);font-size:14px}
   .menu .mi .chev{color:#c0c0c0;font-size:16px;margin-left:8px}
   /* 遮罩 + 弹窗 */
-  .mask{position:absolute;inset:0;background:rgba(0,0,0,.45);display:none;z-index:20;align-items:flex-end}
+  .mask{position:absolute;inset:0;background:rgba(0,0,0,.45);display:none;z-index:55;align-items:flex-end}
   .mask.show{display:flex}
   .sheet{width:100%;background:var(--wx-panel);border-radius:14px 14px 0 0;overflow:hidden;animation:up .2s ease}
   @keyframes up{from{transform:translateY(40px);opacity:.6}to{transform:none;opacity:1}}
@@ -150,7 +150,7 @@
   .sheet .opt+.opt{border-top:1px solid var(--wx-line)}
   .sheet .cancel{margin-top:8px;background:#fff;padding:16px;text-align:center;font-size:17px;font-weight:600;cursor:pointer;color:var(--wx-text)}
   /* 居中对话框 */
-  .dialog{position:absolute;inset:0;background:rgba(0,0,0,.45);display:none;z-index:30;align-items:center;justify-content:center;padding:30px}
+  .dialog{position:absolute;inset:0;background:rgba(0,0,0,.45);display:none;z-index:55;align-items:center;justify-content:center;padding:30px}
   .dialog.show{display:flex}
   .card{width:100%;max-width:300px;background:var(--wx-card);border-radius:12px;overflow:hidden}
   .card .ct{padding:20px 18px 6px;font-size:16px;font-weight:600;text-align:center}
@@ -249,6 +249,22 @@
   .merge-item .mi-name{color:var(--wx-blue)}
   .merge-more{font-size:13px;color:#999}
   .merge-foot{font-size:12px;color:#999;margin-top:6px;padding-top:6px;border-top:1px solid rgba(0,0,0,.06)}
+  /* 账号体系：登录/注册 */
+  #authScreen{position:absolute;inset:0;z-index:80;background:linear-gradient(160deg,#07C160,#0a8f4f);display:none;flex-direction:column;align-items:center;justify-content:center;padding:24px}
+  #authScreen.show{display:flex}
+  .auth-logo{color:#fff;font-size:42px;font-weight:800;letter-spacing:3px}
+  .auth-sub{color:rgba(255,255,255,.88);font-size:13px;margin-top:6px;margin-bottom:28px}
+  .auth-card{width:100%;max-width:320px;background:#fff;border-radius:16px;padding:22px 20px;box-shadow:0 14px 44px rgba(0,0,0,.28)}
+  .auth-title{font-size:18px;font-weight:700;margin-bottom:16px;color:#181818}
+  .auth-input{width:100%;box-sizing:border-box;height:44px;border:1px solid #e3e3e3;border-radius:9px;padding:0 12px;margin-bottom:12px;font-size:15px;outline:none;background:#fafafa}
+  .auth-input:focus{border-color:#07C160;background:#fff}
+  .auth-err{color:#fa5151;font-size:13px;min-height:18px;margin-bottom:4px}
+  .auth-btn{width:100%;height:46px;border:none;border-radius:9px;background:#07C160;color:#fff;font-size:16px;font-weight:600;cursor:pointer;margin-top:6px}
+  .auth-btn:active{opacity:.9}
+  .auth-switch{text-align:center;color:#07C160;font-size:14px;margin-top:16px;cursor:pointer}
+  .auth-forget{text-align:center;color:#999;font-size:12px;margin-top:10px;cursor:pointer}
+  [data-theme="dark"] .auth-card{background:#1f1f1f}
+  [data-theme="dark"] .auth-input{background:#2a2a2a;border-color:#3a3a3a;color:#eee}
 </style>
 </head>
 <body>
@@ -310,7 +326,7 @@
         <div class="avatar" id="meAvatar">我</div>
         <div>
           <div class="mn" id="meName">我</div>
-          <div class="mid2">微信号：家聊用户</div>
+          <div class="mid2">家聊号：<span id="wxId">家聊用户</span></div>
         </div>
       </div>
       <div class="menu">
@@ -325,6 +341,9 @@
       </div>
       <div class="menu" style="margin-top:10px">
         <div class="mi" id="inviteFriend"><span>把家聊分享给家人</span><span><span class="chev">›</span></span></div>
+        <div class="mi" id="myAccount"><span>我的账号</span><span><span class="v" id="acctV">-</span><span class="chev">›</span></span></div>
+        <div class="mi" id="setPwd"><span>设置登录密码</span><span><span class="chev">›</span></span></div>
+        <div class="mi" id="logoutBtn"><span>退出登录</span><span><span class="chev">›</span></span></div>
       </div>
     </div>
   </div>
@@ -356,6 +375,23 @@
     <div class="card" id="dialogCard"></div>
   </div>
 
+  <!-- 账号体系：登录 / 注册（无服务器，仅本机） -->
+  <div id="authScreen">
+    <div class="auth-logo">家聊</div>
+    <div class="auth-sub">家庭聊天 · 免服务器</div>
+    <div class="auth-card">
+      <div class="auth-title" id="authTitle">注册账号</div>
+      <input class="auth-input" id="auUser" placeholder="账号（登录用，建议家人易记）" autocomplete="off">
+      <input class="auth-input" id="auName" placeholder="昵称（家人看到的名字）" autocomplete="off">
+      <input class="auth-input" id="auPwd" type="password" placeholder="登录密码（至少 4 位）">
+      <input class="auth-input" id="auPwd2" type="password" placeholder="确认密码">
+      <div class="auth-err" id="authErr"></div>
+      <button class="auth-btn" id="authSubmit">注册</button>
+      <div class="auth-switch" id="authSwitch">已有账号？去登录</div>
+      <div class="auth-forget" id="authForget">忘记密码？清除本机账号数据</div>
+    </div>
+  </div>
+
   <div class="toast" id="toast"></div>
 </div>
 
@@ -373,6 +409,93 @@ function lsSet(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch(e){}
 let uid = localStorage.getItem("fc_uid");
 if(!uid){ uid = "u"+Math.random().toString(36).slice(2,10); localStorage.setItem("fc_uid",uid); }
 let myName = localStorage.getItem("fc_name") || "";
+
+// ---------- 账号体系（无服务器，仅本机存储） ----------
+let accounts = lsGet("fc_accounts", []);
+let session = lsGet("fc_session", null);
+let authMode = "register";
+
+async function sha256(s){
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+  return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,"0")).join("");
+}
+async function hashPw(pw, salt){ return await sha256(pw + "|" + salt); }
+function genSalt(){ return Math.random().toString(36).slice(2,12); }
+
+function showAuth(mode){
+  authMode = mode || (accounts.length>0 ? "login" : "register");
+  $("authScreen").classList.add("show");
+  $("authTitle").textContent = authMode==="register" ? "注册账号" : "登录家聊";
+  $("auName").style.display = authMode==="register" ? "" : "none";
+  $("auPwd2").style.display = authMode==="register" ? "" : "none";
+  $("authSubmit").textContent = authMode==="register" ? "注册" : "登录";
+  $("authSwitch").textContent = authMode==="register" ? "已有账号？去登录" : "没有账号？去注册";
+  $("authForget").style.display = authMode==="login" ? "" : "none";
+  $("authErr").textContent = "";
+  $("auUser").value=""; $("auName").value=""; $("auPwd").value=""; $("auPwd2").value="";
+  setTimeout(()=>{ try{ $("auUser").focus(); }catch(e){} }, 60);
+}
+function hideAuth(){ $("authScreen").classList.remove("show"); }
+
+async function doRegister(){
+  const user = ($("auUser").value||"").trim();
+  const name = ($("auName").value||"").trim() || user;
+  const pwd = $("auPwd").value||"";
+  const pwd2 = $("auPwd2").value||"";
+  if(user.length<2){ $("authErr").textContent="账号至少 2 个字符"; return; }
+  if(accounts.some(a=>a.user===user)){ $("authErr").textContent="该账号已存在，请直接登录"; return; }
+  if(pwd.length<4){ $("authErr").textContent="密码至少 4 位"; return; }
+  if(pwd!==pwd2){ $("authErr").textContent="两次密码不一致"; return; }
+  const salt=genSalt(); const hash=await hashPw(pwd,salt);
+  const acc={ user, name, uid:"u"+Math.random().toString(36).slice(2,10), salt, hash };
+  accounts.push(acc); lsSet("fc_accounts", accounts);
+  session={ user }; lsSet("fc_session", session);
+  hideAuth(); applySession(acc);
+}
+async function doLogin(){
+  const user=($("auUser").value||"").trim();
+  const pwd=$("auPwd").value||"";
+  const acc=accounts.find(a=>a.user===user);
+  if(!acc){ $("authErr").textContent="账号不存在"; return; }
+  if(acc.hash!==""){ // 设置过密码的账号需校验
+    const hash=await hashPw(pwd, acc.salt);
+    if(hash!==acc.hash){ $("authErr").textContent="密码错误"; return; }
+  } // 空 hash（旧版迁移账号、未设密码）接受任意密码
+  session={ user }; lsSet("fc_session", session);
+  hideAuth(); applySession(acc);
+}
+function applySession(acc){
+  uid = acc.uid || uid;
+  myName = acc.name || myName;
+  localStorage.setItem("fc_uid", uid);
+  localStorage.setItem("fc_name", myName);
+  renderMe();
+  afterName();
+}
+async function setMyPassword(p){
+  const acc=accounts.find(a=>a.user===(session&&session.user));
+  if(!acc) return;
+  const salt=genSalt(); acc.salt=salt; acc.hash=await hashPw(p,salt);
+  lsSet("fc_accounts", accounts);
+  toast("登录密码已设置");
+}
+function doLogout(){
+  session=null; lsSet("fc_session", null);
+  showAuth("login");
+}
+function initAuth(){
+  accounts = lsGet("fc_accounts", []);
+  session = lsGet("fc_session", null);
+  // 旧版迁移：仅有昵称、无账号体系 → 自动建一个无密码账号并登录，避免锁死
+  if(accounts.length===0 && myName){
+    const legacy={ user:(myName||"me"), name:myName, uid:uid, salt:"", hash:"" };
+    accounts.push(legacy); lsSet("fc_accounts", accounts);
+    session={ user:legacy.user }; lsSet("fc_session", session);
+  }
+  const cur = session && accounts.find(a=>a.user===session.user);
+  if(cur){ applySession(cur); return; }
+  showAuth(accounts.length>0 ? "login" : "register");
+}
 
 // ---------- 会话数据（多会话） ----------
 let chats = lsGet("fc_chats", null);
@@ -1032,6 +1155,8 @@ function renderMe(){
   $("meName").textContent=nm; $("setNameV").textContent=nm;
   $("meAvatar").textContent=avatarText(nm); $("meAvatar").style.background=colorFrom(uid);
   const fv=$("favV"); if(fv) fv.textContent=lsGet("fc_favs",[]).length;
+  const wx=$("wxId"); if(wx) wx.textContent = session?session.user:"-";
+  const av=$("acctV"); if(av) av.textContent = session?session.user:"-";
 }
 
 // ---------- 通知 ----------
@@ -1254,7 +1379,9 @@ function renameChat(c){
 
 // 我 - 菜单
 $("setName").onclick=()=>promptDialog("设置昵称","其他家人看到的名字：",myName,(n)=>{
-  n=(n||"").trim(); if(!n) return; myName=n; localStorage.setItem("fc_name",n); renderMe(); toast("已保存");
+  n=(n||"").trim(); if(!n) return; myName=n; localStorage.setItem("fc_name",n);
+  const acc=accounts.find(a=>a.user===(session&&session.user)); if(acc){ acc.name=n; lsSet("fc_accounts",accounts); }
+  renderMe(); toast("已保存");
 });
 $("openNotif").onclick=()=>{
   if(!("Notification" in window)){ toast("当前环境不支持通知"); return; }
@@ -1290,6 +1417,20 @@ $("inviteFriend").onclick=()=>{
 };
 $("addBtn").onclick=openAddDialog;
 
+// ---------- 账号体系：登录/注册 交互 ----------
+$("authSubmit").onclick=()=>{ authMode==="register" ? doRegister() : doLogin(); };
+$("authSwitch").onclick=()=>showAuth(authMode==="register"?"login":"register");
+$("authForget").onclick=()=>confirmDialog("清除本机账号","将删除本设备上所有账号与登录信息（聊天记录保留），之后需重新注册。确定？",()=>{
+  accounts=[]; lsSet("fc_accounts",[]); session=null; lsSet("fc_session",null); showAuth("register"); toast("已清除本机账号");
+});
+$("auPwd").onkeydown=(e)=>{ if(e.key==="Enter"){ authMode==="register"?doRegister():doLogin(); } };
+$("auPwd2").onkeydown=(e)=>{ if(e.key==="Enter"){ doRegister(); } };
+$("auUser").onkeydown=(e)=>{ if(e.key==="Enter"){ (authMode==="register"?$("auName"):$("auPwd")).focus(); } };
+// 我页：账号相关
+$("myAccount").onclick=()=>{ const u=session?session.user:"-"; dialogCard(`<div class="ct">我的账号</div><div class="cb">当前家聊号：<b>${escapeHtml(u)}</b><br>昵称：${escapeHtml(myName||"")}<br><br>这是本机账号，无服务器、不上传任何数据。</div><div class="cactions"><button id="dOk">知道了</button></div>`); $("dOk").onclick=closeDialog; };
+$("setPwd").onclick=()=>{ promptDialog("设置登录密码","输入新的登录密码（至少 4 位）：","",(p)=>{ if(!p||p.length<4){ toast("密码至少 4 位"); return; } setMyPassword(p); },false,"password"); };
+$("logoutBtn").onclick=()=>confirmDialog("退出登录","退出后需要重新输入密码才能进入。确定退出？",()=>doLogout());
+
 // ---------- 通用弹窗 ----------
 function openSheet(opts){
   const s=$("sheet"); s.innerHTML="";
@@ -1302,8 +1443,11 @@ $("sheetMask").onclick=(e)=>{ if(e.target===$("sheetMask")) closeSheet(); };
 
 function dialogCard(html){ $("dialogCard").innerHTML=html; $("dialog").classList.add("show"); }
 function closeDialog(){ $("dialog").classList.remove("show"); }
-function promptDialog(title, desc, def, cb, multiline){
-  dialogCard(`<div class="ct">${escapeHtml(title)}</div><div class="cb">${escapeHtml(desc)}</div><input id="dInput" value="${escapeHtml(def||"")}" placeholder=""><div class="cactions"><button class="ghost" id="dCancel">取消</button><button id="dOk">确定</button></div>`);
+function promptDialog(title, desc, def, cb, multiline, type){
+  const inputHtml = multiline
+    ? `<textarea id="dInput" placeholder="">${escapeHtml(def||"")}</textarea>`
+    : `<input id="dInput" type="${type||"text"}" value="${escapeHtml(def||"")}" placeholder="">`;
+  dialogCard(`<div class="ct">${escapeHtml(title)}</div><div class="cb">${escapeHtml(desc)}</div>${inputHtml}<div class="cactions"><button class="ghost" id="dCancel">取消</button><button id="dOk">确定</button></div>`);
   const inp=$("dInput"); setTimeout(()=>inp.focus(),50);
   $("dCancel").onclick=closeDialog;
   $("dOk").onclick=()=>{ const v=inp.value; closeDialog(); cb&&cb(v); };
@@ -1341,11 +1485,11 @@ function checkInvite(){
 
 // ---------- 启动 ----------
 function boot(){
+  $("splash").style.display="none"; // 立即隐藏加载页，避免被弹窗遮挡造成「卡加载」
   buildEmoji();
-  // 首次设置昵称
-  if(!myName){ promptDialog("欢迎使用家聊","先设置一个昵称，家人会看到它：","家人",(n)=>{ myName=(n||"").trim()||"家人"; localStorage.setItem("fc_name",myName); renderMe(); afterName(); }); }
-  else afterName();
+  initAuth(); // 注册/登录鉴权后再进入聊天
 }
+let appBooted=false;
 function afterName(){
   $("splash").style.display="none";
   checkInvite();
@@ -1353,19 +1497,22 @@ function afterName(){
   applyFont();
   applyBg();
   renderChats(); renderMe(); updateTabBadge();
-  const mb=$("messages"); if(mb) mb.addEventListener("scroll", onMsgScroll);
+  const mb=$("messages"); if(mb && !appBooted) mb.addEventListener("scroll", onMsgScroll);
   connectAll(); syncNative();
-  // 通知权限
-  if("Notification" in window && Notification.permission==="default") Notification.requestPermission().then(p=>{ const v=$("notifV"); if(v) v.textContent=(p==="granted"?"开启":"已关闭"); });
-  if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
-  // 周期性重新拉取历史（SSE 断线兜底）
-  setInterval(()=>{ if(document.visibilityState==="visible"){ chats.forEach(c=>loadHistory(c.topic)); } }, 30000);
-  // 周期性广播自己的 Web Push 订阅（便于其他浏览器端推送）
-  setInterval(()=>{ chats.forEach(c=>shareSubscription(c.topic)); }, 60000);
-  // 页面显隐时刷新未读
-  document.addEventListener("visibilitychange",()=>{ if(!document.hidden) renderChats(); });
-  // 进入后台时通知原生
-  if(typeof AndroidBridge!=="undefined"){ window.notifyAppBackground=()=>{ try{AndroidBridge.notifyBackground&&AndroidBridge.notifyBackground();}catch(e){} }; window.notifyAppForeground=()=>{ try{AndroidBridge.notifyForeground&&AndroidBridge.notifyForeground();}catch(e){} }; }
+  if(!appBooted){
+    appBooted=true;
+    // 通知权限
+    if("Notification" in window && Notification.permission==="default") Notification.requestPermission().then(p=>{ const v=$("notifV"); if(v) v.textContent=(p==="granted"?"开启":"已关闭"); });
+    if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
+    // 周期性重新拉取历史（SSE 断线兜底）
+    setInterval(()=>{ if(document.visibilityState==="visible"){ chats.forEach(c=>loadHistory(c.topic)); } }, 30000);
+    // 周期性广播自己的 Web Push 订阅（便于其他浏览器端推送）
+    setInterval(()=>{ chats.forEach(c=>shareSubscription(c.topic)); }, 60000);
+    // 页面显隐时刷新未读
+    document.addEventListener("visibilitychange",()=>{ if(!document.hidden) renderChats(); });
+    // 进入后台时通知原生
+    if(typeof AndroidBridge!=="undefined"){ window.notifyAppBackground=()=>{ try{AndroidBridge.notifyBackground&&AndroidBridge.notifyBackground();}catch(e){} }; window.notifyAppForeground=()=>{ try{AndroidBridge.notifyForeground&&AndroidBridge.notifyForeground();}catch(e){} }; }
+  }
 }
 boot();
 </script>
