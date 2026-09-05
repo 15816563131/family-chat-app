@@ -915,9 +915,11 @@ function scheduleReconnect(){
   }, esBackoff);
   esBackoff = Math.min(esBackoff*2, 30000);
 }
-// 新增/加入会话：确保统一连接覆盖该 topic，并注册 Web Push 订阅
+// 新增/加入会话：确保统一连接覆盖该 topic，并立即注册 Web Push 订阅
+const subShareTs = {}; // 每个 topic 上次广播 push 订阅的时间，用于节流（避免每 60s 全量发布触发 ntfy 429）
 function connectTopic(topic){
   ensureConnection();
+  subShareTs[topic] = 0; // 新会话强制立即共享，后续走节流
   try{ shareSubscription(topic); }catch(e){}
 }
 // 全量连接：错峰拉取各会话历史 + 建立统一 SSE
@@ -936,9 +938,11 @@ function loadHistory(topic){
 }
 async function shareSubscription(topic){
   if(!window.FC_PUSH) return;
+  const now = Date.now();
+  if(subShareTs[topic] && now - subShareTs[topic] < 600000) return; // 10 分钟内已广播过则跳过，显著减少 ntfy 发布量
   try{
     const sub = await FC_PUSH.subscribePush();
-    if(sub){ await fetch(BASE+"/"+topic, {method:"POST", headers:{"Title":"sub","Tags":"sub"+uid,"Priority":"min"}, body: JSON.stringify(sub)}); }
+    if(sub){ await fetch(BASE+"/"+topic, {method:"POST", headers:{"Title":"sub","Tags":"sub"+uid,"Priority":"min"}, body: JSON.stringify(sub)}); subShareTs[topic]=Date.now(); }
   }catch(e){}
 }
 function handleIncoming(topic, m, fromHistory){
@@ -2290,10 +2294,17 @@ function afterName(){
     if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
     // 解锁音频上下文（浏览器自动播放策略要求用户手势后才能发声）
     ["click","touchstart","keydown"].forEach(ev=>document.addEventListener(ev, _unlockAudio, {passive:true, once:true}));
-    // 周期性重新拉取历史（SSE 断线兜底）：拉长为 60s 并错峰，避免瞬间 N 个请求触发 ntfy 429
-    setInterval(()=>{ if(document.visibilityState==="visible"){ chats.forEach((c,i)=> setTimeout(()=>loadHistory(c.topic), i*500)); } }, 60000);
-    // 周期性广播自己的 Web Push 订阅（便于其他浏览器端推送）
-    setInterval(()=>{ chats.forEach(c=>shareSubscription(c.topic)); }, 60000);
+    // 周期性历史兜底：SSE 正常时实时收消息，无需拉历史；仅断线时或每 5 分钟轻量兜底一次，避免持续刷 ntfy 触发 429
+    let lastHistCatchup = 0;
+    setInterval(()=>{
+      if(document.visibilityState!=="visible") return;
+      const now = Date.now();
+      if(esAlive && now - lastHistCatchup < 300000) return; // SSE 活着且 5 分钟内已兜底过 → 跳过
+      lastHistCatchup = now;
+      chats.forEach((c,i)=> setTimeout(()=>loadHistory(c.topic), i*700));
+    }, 60000);
+    // 周期性广播自己的 Web Push 订阅（便于其他浏览器端推送）；shareSubscription 内部已做 10 分钟节流
+    setInterval(()=>{ chats.forEach(c=>shareSubscription(c.topic)); }, 300000);
     // 页面显隐时刷新未读
     document.addEventListener("visibilitychange",()=>{ if(!document.hidden) renderChats(); });
     // 进入后台时通知原生
