@@ -279,6 +279,7 @@
   <div class="screen active" id="screenChats">
     <div class="header">
       <div class="title">微信</div>
+      <div class="right action" id="markAllRead" style="display:none">全部已读</div>
       <div class="right" id="addBtn" title="发起/加入聊天">
         <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#181818" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
       </div>
@@ -855,6 +856,7 @@ function retrySend(topic, id){
 let searchKw = "";
 function renderChats(){
   const box=$("chatList"); box.innerHTML="";
+  if(searchKw.trim()){ renderSearchResults(searchKw.trim(), box); return; }
   let list = chats.slice().sort((a,b)=> (b.pinned?1:0)-(a.pinned?1:0) || b.order-a.order);
   if(searchKw){ const k=searchKw.toLowerCase(); list=list.filter(c=>c.name.toLowerCase().includes(k)); }
   if(list.length===0){
@@ -879,13 +881,41 @@ function renderChats(){
     box.appendChild(it);
   });
 }
+// 全局搜索：匹配会话名 + 所有会话的消息内容
+function renderSearchResults(kw, box){
+  const k=kw.toLowerCase();
+  const results=[];
+  chats.forEach(c=>{
+    if(c.name.toLowerCase().includes(k)) results.push({topic:c.topic, name:c.name, color:c.color, snippet:"打开会话", isChat:true});
+    getMsgs(c.topic).forEach(m=>{
+      const t=(m.text||"").toLowerCase();
+      if(t && t.indexOf(k)>=0) results.push({topic:c.topic, name:c.name, color:c.color, snippet:(m.self?"我":(m.name||"对方"))+": "+(m.text||""), isChat:false});
+    });
+  });
+  if(results.length===0){
+    box.innerHTML='<div class="empty"><div class="big">🔍</div><div>没有找到相关聊天或消息</div></div>'; return;
+  }
+  results.slice(0,100).forEach(r=>{
+    const it=document.createElement("div"); it.className="item";
+    const av=document.createElement("div"); av.className="avatar"; av.style.background=r.color; av.textContent=avatarText(r.name);
+    const mid=document.createElement("div"); mid.className="mid";
+    const nm=document.createElement("div"); nm.className="name"; nm.textContent=(r.isChat?"💬 ":"")+r.name;
+    const pv=document.createElement("div"); pv.className="preview"; pv.textContent=(r.isChat?"":r.snippet);
+    mid.appendChild(nm); mid.appendChild(pv);
+    it.appendChild(av); it.appendChild(mid);
+    it.onclick=()=>{ searchKw=""; const si=$("searchInput"); if(si) si.value=""; openChat(r.topic); };
+    box.appendChild(it);
+  });
+}
 
 // 会话长按菜单：置顶 / 免打扰 / 重命名 / 删除
 function showChatMenu(c){
   openSheet([
+    {label:"标为已读", fn:()=>{ c.unread=0; c.atMe=false; saveChats(); renderChats(); updateTabBadge(); toast("已标为已读"); }},
     {label: c.pinned ? "取消置顶" : "置顶聊天", fn:()=>{ c.pinned=!c.pinned; saveChats(); renderChats(); toast(c.pinned?"已置顶":"已取消置顶"); if(activeTopic===c.topic) renderChatFull(c.topic); }},
     {label: c.mute ? "允许消息通知" : "消息免打扰", fn:()=>{ c.mute=!c.mute; saveChats(); syncNative(); renderChats(); toast(c.mute?"已免打扰":"已开启通知"); }},
     {label:"修改名称", fn:()=>renameChat(c)},
+    {label:"清空聊天记录", danger:true, fn:()=>confirmDialog("清空聊天记录","将删除「"+c.name+"」的全部本地消息（不可恢复），确定？",()=>{ setMsgs(c.topic,[]); c.lastMsg=""; c.lastTime=0; c.unread=0; c.atMe=false; saveChats(); if(activeTopic===c.topic) renderChatFull(c.topic); renderChats(); updateTabBadge(); toast("已清空"); })},
     {label:"删除会话", danger:true, fn:()=>confirmDialog("删除会话","将从列表中移除「"+c.name+"」（服务器消息仍在），确定？",()=>{ deleteChat(c.topic); })},
   ]);
 }
@@ -1264,6 +1294,7 @@ function updateTabBadge(){
   const total=chats.reduce((a,c)=>a+(c.unread||0),0);
   const b=$("tabBadge");
   if(total>0){ b.style.display="flex"; b.textContent=total>99?"99+":total; } else b.style.display="none";
+  const mar=$("markAllRead"); if(mar) mar.style.display = total>0 ? "" : "none";
 }
 
 // ---------- 我 ----------
