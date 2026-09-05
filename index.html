@@ -899,9 +899,10 @@ function handleIncoming(topic, m, fromHistory){
   if(tags.includes("typing") && !fromHistory){ showTyping(topic, m.title||"对方"); return; }
   const parsed = parseQuote(m.message||"");
   const pm = parseMerge(parsed.text);
-  if(pm.ok){ addLocalMsg(topic, {id:m.id, sender, name:m.title||"对方", text:"", merge:pm.items, time:(m.time||Date.now()/1000), self:false, mentioned:false}, {silentUnread:false}); return; }
+  if(pm.ok){ addLocalMsg(topic, {id:m.id, sender, name:m.title||"对方", text:"", merge:pm.items, time:(m.time||Date.now()/1000), self:false, mentioned:false}, {silentUnread:false}); if(!fromHistory) playNewMsgCue(topic); return; }
   const mentioned = !!myName && myName.length>0 && parsed.text.indexOf("@"+myName) >= 0;
   addLocalMsg(topic, {id:m.id, sender, name:m.title||"对方", text:parsed.text, quote:parsed.quote, time:(m.time||Date.now()/1000), self:false, mentioned}, {silentUnread:false});
+  if(!fromHistory) playNewMsgCue(topic);
 }
 
 // 撤回：用灰色系统提示「X 撤回了一条消息」替换原消息（微信式），而非直接删除
@@ -1492,12 +1493,46 @@ function renderMe(){
   const fv=$("favV"); if(fv) fv.textContent=lsGet("fc_favs",[]).length;
   const wx=$("wxId"); if(wx) wx.textContent = session?session.user:"-";
   const av=$("acctV"); if(av) av.textContent = session?session.user:"-";
+  const nv=$("notifV"); if(nv) nv.textContent = lsGet("fc_cue", true) ? "开启" : "已关闭";
 }
 
 // ---------- 通知 ----------
 function notify(title, body){
   if(!("Notification" in window)) return;
   if(Notification.permission==="granted"){ try{ new Notification(title,{body:body,tag:"fc"}); }catch(e){} }
+}
+
+// ---------- 新消息提示音 + 振动（纯本地，尊重「新消息通知」开关） ----------
+let _actx=null;
+function _initAudio(){ try{ if(!_actx){ const AC=window.AudioContext||window.webkitAudioContext; if(AC) _actx=new AC(); } if(_actx && _actx.state==="suspended") _actx.resume(); }catch(e){} }
+function _unlockAudio(){ _initAudio(); }
+function _cueSound(){
+  try{
+    _initAudio();
+    if(!_actx) return;
+    if(_actx.state==="suspended"){ _actx.resume(); }
+    const t=_actx.currentTime;
+    const o=_actx.createOscillator(), g=_actx.createGain();
+    o.type="sine";
+    o.frequency.setValueAtTime(880, t);
+    o.frequency.exponentialRampToValueAtTime(660, t+0.12);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.22, t+0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t+0.20);
+    o.connect(g); g.connect(_actx.destination);
+    o.start(t); o.stop(t+0.22);
+  }catch(e){}
+}
+// 提示开关由「新消息通知」统一控制（fc_cue），在 APK 的 WebView 中 Notification 不可用也能生效
+function playNewMsgCue(topic){
+  try{
+    if(!lsGet("fc_cue", true)) return;           // 尊重「新消息通知」开关
+    const c=getChat(topic);
+    if(c && c.mute) return;                       // 免打扰不响
+    _cueSound();
+    const viewing = (topic===activeTopic && !document.hidden);
+    if(!viewing && navigator.vibrate) navigator.vibrate(30); // 仅在非当前查看会话时振动
+  }catch(e){}
 }
 
 // ---------- 原生桥：多房间后台轮询 ----------
@@ -1719,8 +1754,14 @@ $("setName").onclick=()=>promptDialog("设置昵称","其他家人看到的名�
   renderMe(); toast("已保存");
 });
 $("openNotif").onclick=()=>{
-  if(!("Notification" in window)){ toast("当前环境不支持通知"); return; }
-  Notification.requestPermission().then(p=>{ $("notifV").textContent=(p==="granted"?"开启":"已关闭"); toast(p==="granted"?"通知已开启":"通知未授权"); });
+  const on = !lsGet("fc_cue", true);
+  lsSet("fc_cue", on);
+  $("notifV").textContent = on ? "开启" : "已关闭";
+  toast(on ? "新消息提示已开启" : "新消息提示已关闭");
+  // 顺带申请系统通知权限（用于 Web 端系统通知 / Web Push），不阻断提示音/振动
+  if(on && ("Notification" in window) && Notification.permission==="default"){
+    Notification.requestPermission().then(p=>{ const v=$("notifV"); if(v) v.textContent = lsGet("fc_cue", true) ? "开启":"已关闭"; }).catch(()=>{});
+  }
 };
 // 深色模式
 let darkMode = localStorage.getItem("fc_dark") || "auto"; // auto | on | off
@@ -1950,9 +1991,11 @@ function afterName(){
   connectAll(); syncNative();
   if(!appBooted){
     appBooted=true;
-    // 通知权限
-    if("Notification" in window && Notification.permission==="default") Notification.requestPermission().then(p=>{ const v=$("notifV"); if(v) v.textContent=(p==="granted"?"开启":"已关闭"); });
+    // 通知权限（用于 Web 端系统通知 / Web Push）
+    if("Notification" in window && Notification.permission==="default") Notification.requestPermission().then(p=>{ const v=$("notifV"); if(v) v.textContent = lsGet("fc_cue", true) ? "开启":"已关闭"; }).catch(()=>{});
     if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
+    // 解锁音频上下文（浏览器自动播放策略要求用户手势后才能发声）
+    ["click","touchstart","keydown"].forEach(ev=>document.addEventListener(ev, _unlockAudio, {passive:true, once:true}));
     // 周期性重新拉取历史（SSE 断线兜底）
     setInterval(()=>{ if(document.visibilityState==="visible"){ chats.forEach(c=>loadHistory(c.topic)); } }, 30000);
     // 周期性广播自己的 Web Push 订阅（便于其他浏览器端推送）
