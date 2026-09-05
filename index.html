@@ -394,8 +394,8 @@ function addLocalMsg(topic, msg, opts){
   if(topic===activeTopic){ appendBubble(msg); scrollBottom(); }
   renderChats();
   updateTabBadge();
-  // 后台通知
-  if(topic!==activeTopic && document.hidden){
+  // 后台通知：APK 内由原生层统一弹系统通知，避免重复；浏览器 PWA 用 Web Notification
+  if(topic!==activeTopic && document.hidden && typeof AndroidBridge==="undefined"){
     notify(myName||"家聊", (msg.name||"")+": "+(msg.text||""));
   }
 }
