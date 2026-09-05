@@ -383,6 +383,10 @@ body::after{width:40vw;height:40vw;right:-6vw;top:8vw;background:radial-gradient
 .sel-bar{background:rgba(255,255,255,.7);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border-top:1px solid rgba(255,255,255,.5)}
 .quote-bar{background:rgba(255,255,255,.55);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
 .jump-latest{background:rgba(255,255,255,.78);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.6)}
+.reed-bar{display:none;align-items:center;background:rgba(255,255,255,.6);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);padding:8px 12px;flex:0 0 auto;font-size:13px;color:var(--teal);cursor:pointer}
+.reed-bar.show{display:flex}
+.reed-bar .reed-close{margin-left:auto;color:#999;padding:0 4px;cursor:pointer}
+[data-theme="dark"] .reed-bar{background:rgba(30,36,54,.7);border:1px solid rgba(255,255,255,.14)}
 
 /* 主色：翡翠/青 渐变 */
 .composer .send{background:linear-gradient(135deg,var(--emerald),var(--teal))}
@@ -447,6 +451,7 @@ body::after{width:40vw;height:40vw;right:-6vw;top:8vw;background:radial-gradient
     <div class="jump-latest" id="jumpLatest"><span class="jl-badge" id="jumpNew" style="display:none">0</span>↓</div>
     <div class="at-pop" id="atPop"></div>
     <div class="quote-bar" id="quoteBar"><div class="qb-text" id="qbText"></div><div class="qb-close" id="qbClose">✕</div></div>
+    <div class="reed-bar" id="reedBar"><span id="reedText"></span><span class="reed-close" id="reedClose">✕</span></div>
     <div class="emoji-panel" id="emojiPanel"></div>
     <div class="sel-bar" id="selBar"><span id="selCount">已选 0 条</span><div class="sel-acts"><span id="selFwd">转发</span><span id="selFav">收藏</span><span id="selDel">删除</span><span id="selCancel">取消</span></div></div>
     <form class="composer" id="form">
@@ -1004,7 +1009,7 @@ let searchKw = "";
 function renderChats(){
   const box=$("chatList"); box.innerHTML="";
   if(searchKw.trim()){ renderSearchResults(searchKw.trim(), box); return; }
-  let list = chats.slice().sort((a,b)=> (b.pinned?1:0)-(a.pinned?1:0) || b.order-a.order);
+  let list = chats.slice().filter(c=>!c.hidden).sort((a,b)=> (b.pinned?1:0)-(a.pinned?1:0) || b.order-a.order);
   if(searchKw){ const k=searchKw.toLowerCase(); list=list.filter(c=>c.name.toLowerCase().includes(k)); }
   if(list.length===0){
     const e=document.createElement("div"); e.className="empty";
@@ -1062,6 +1067,7 @@ function showChatMenu(c){
     {label: c.pinned ? "取消置顶" : "置顶聊天", fn:()=>{ c.pinned=!c.pinned; saveChats(); renderChats(); toast(c.pinned?"已置顶":"已取消置顶"); if(activeTopic===c.topic) renderChatFull(c.topic); }},
     {label: c.mute ? "允许消息通知" : "消息免打扰", fn:()=>{ c.mute=!c.mute; saveChats(); syncNative(); renderChats(); toast(c.mute?"已免打扰":"已开启通知"); }},
     {label:"修改名称", fn:()=>renameChat(c)},
+    {label:"不显示该聊天", fn:()=>{ c.hidden=true; saveChats(); renderChats(); toast("已隐藏，可在顶部搜索找回"); }},
     {label:"清空聊天记录", danger:true, fn:()=>confirmDialog("清空聊天记录","将删除「"+c.name+"」的全部本地消息（不可恢复），确定？",()=>{ setMsgs(c.topic,[]); c.lastMsg=""; c.lastTime=0; c.unread=0; c.atMe=false; saveChats(); if(activeTopic===c.topic) renderChatFull(c.topic); renderChats(); updateTabBadge(); toast("已清空"); })},
     {label:"删除会话", danger:true, fn:()=>confirmDialog("删除会话","将从列表中移除「"+c.name+"」（服务器消息仍在），确定？",()=>{ deleteChat(c.topic); })},
   ]);
@@ -1073,8 +1079,9 @@ function renderContacts(){
   if(chats.length===0){
     box.innerHTML='<div class="empty"><div class="big">👥</div><div>通讯录为空</div></div>'; return;
   }
-  const g=document.createElement("div"); g.className="group-title"; g.textContent="聊天 ("+chats.length+")"; box.appendChild(g);
-  chats.forEach(c=>{
+  const visCh=chats.filter(c=>!c.hidden);
+  const g=document.createElement("div"); g.className="group-title"; g.textContent="聊天 ("+visCh.length+")"; box.appendChild(g);
+  visCh.forEach(c=>{
     const it=document.createElement("div"); it.className="item";
     const av=document.createElement("div"); av.className="avatar"; av.style.background=c.color; av.textContent=avatarText(c.name);
     const mid=document.createElement("div"); mid.className="mid";
@@ -1094,6 +1101,7 @@ function renderContacts(){
 let activeTopic = null;
 function openChat(topic){
   const c=getChat(topic); if(!c) return;
+  if(c.hidden){ c.hidden=false; saveChats(); }
   activeTopic=topic;
   const hadUnread = c.unread>0;
   c.unread=0; c.atMe=false; saveChats(); renderChats(); updateTabBadge();
@@ -1248,6 +1256,7 @@ function showMsgMenu(m){
   if(m.text) opts.push({label:"回复", fn:()=>doReply(m)});
   if(m.text) opts.push({label:"转发", fn:()=>forwardMessage(m)});
   if(m.text) opts.push({label:"收藏", fn:()=>addFav(m)});
+  if(m.text) opts.push({label:"提醒", fn:()=>scheduleReminder(m)});
   opts.push({label:"拍一拍", fn:()=>doPat(m.self?(myName||"我"):(m.name||"对方"))});
   opts.push({label:"多选", fn:()=>enterSelect(m)});
   const curPin = activeTopic?getChat(activeTopic).pinned:null;
@@ -1257,6 +1266,31 @@ function showMsgMenu(m){
   if(canRecall) opts.push({label:"撤回", fn:()=>doRecall(m)});
   opts.push({label:"删除", danger:true, fn:()=>{ recallMessage(activeTopic, m.id); toast("已删除"); }});
   openSheet(opts);
+}
+// 消息定时提醒（纯本地：仅应用打开时触发；关闭后不会后台提醒）
+let reminders = lsGet("fc_reminders", []);
+function scheduleReminder(m){
+  const now=Date.now()/1000;
+  const opts=[];
+  opts.push({label:"1 小时后", fn:()=>addReminder(m, now+3600)});
+  opts.push({label:"3 小时后", fn:()=>addReminder(m, now+3*3600)});
+  const d=new Date(); d.setHours(20,0,0,0); if(d.getTime()/1000<=now) d.setDate(d.getDate()+1);
+  opts.push({label:"今晚 20:00", fn:()=>addReminder(m, d.getTime()/1000)});
+  opts.push({label:"自定义（分钟）", fn:()=>promptDialog("定时提醒","多少分钟后提醒？","",(min)=>{ const n=parseInt(min,10); if(!n||n<=0){ toast("请输入有效分钟数"); return; } addReminder(m, now+n*60); }, false, "number")});
+  openSheet(opts);
+}
+function addReminder(m, dueTs){
+  reminders.push({topic:activeTopic, id:m.id, text:(m.text||""), due:dueTs}); lsSet("fc_reminders", reminders);
+  const when=new Date(dueTs*1000);
+  toast("已设置提醒："+(when.getMonth()+1)+"月"+when.getDate()+"日 "+String(when.getHours()).padStart(2,"0")+":"+String(when.getMinutes()).padStart(2,"0"));
+}
+function checkReminders(){
+  if(!reminders.length) return;
+  const now=Date.now()/1000;
+  const due=reminders.filter(r=>r.due<=now);
+  if(!due.length) return;
+  reminders=reminders.filter(r=>r.due>now); lsSet("fc_reminders", reminders);
+  due.forEach(r=>{ notify("⏰ 家聊提醒", r.text); toast("⏰ 提醒："+(r.text.length>30?r.text.slice(0,30)+"…":r.text)); });
 }
 
 // 引用回复
@@ -1269,6 +1303,11 @@ function doReply(m){
 }
 function hideQuoteBar(){ replyingTo=null; const qb=$("quoteBar"); if(qb) qb.classList.remove("show"); }
 $("qbClose").onclick=hideQuoteBar;
+// 撤回后「重新编辑」
+let reEditText="";
+function showReEdit(text){ reEditText=text||""; const t=$("reedText"); if(t) t.textContent="重新编辑："+(reEditText.length>20?reEditText.slice(0,20)+"…":reEditText); const b=$("reedBar"); if(b) b.classList.add("show"); try{$("text").focus();}catch(e){} }
+function hideReEdit(){ reEditText=""; const b=$("reedBar"); if(b) b.classList.remove("show"); }
+$("reedBar").onclick=(e)=>{ if(e.target.id==="reedClose"){ hideReEdit(); return; } if(reEditText){ const ta=$("text"); ta.value=reEditText; autoGrow(ta); hideReEdit(); ta.focus(); } };
 $("jumpLatest").onclick=()=>{ scrollBottom(); if(newCount>0) sendRead(activeTopic); };
 $("pinText").onclick=()=>{ const c=getChat(activeTopic); if(c&&c.pinned){ const el=document.querySelector('#messages .row[data-id="'+c.pinned.id+'"]'); if(el) el.scrollIntoView({block:"center"}); } };
 $("pinClose").onclick=()=>unpinMessage();
@@ -1353,6 +1392,7 @@ function doPat(name){
   try{ fetch(BASE+"/"+activeTopic, {method:"POST", headers:{ "Title":"pat", "Tags": uid+",pat_"+activeTopic, "Priority":"min" }, body: JSON.stringify({from, to:name})}); }catch(e){}
 }
 function doRecall(m){
+  if(m.self && m.text && !m.merge){ showReEdit(m.text); }
   // 本地先移除
   recallMessage(activeTopic, m.id);
   // 广播撤回：让同一会话的其他端也撤回
@@ -1489,7 +1529,7 @@ const form=$("form");
 form.addEventListener("submit",(e)=>{
   e.preventDefault();
   const ta=$("text"); const v=ta.value; ta.value=""; autoGrow(ta); hideAtPicker();
-  if(activeTopic){ const q = replyingTo; replyingTo=null; hideQuoteBar(); sendMessage(activeTopic, v, q); }
+  if(activeTopic){ const q = replyingTo; replyingTo=null; hideQuoteBar(); hideReEdit(); sendMessage(activeTopic, v, q); }
 });
 $("text").addEventListener("input",(e)=>{ autoGrow(e.target); onComposerInput(e.target); });
 $("text").addEventListener("blur",()=>setTimeout(hideAtPicker,200));
@@ -1921,6 +1961,8 @@ function afterName(){
     document.addEventListener("visibilitychange",()=>{ if(!document.hidden) renderChats(); });
     // 进入后台时通知原生
     if(typeof AndroidBridge!=="undefined"){ window.notifyAppBackground=()=>{ try{AndroidBridge.notifyBackground&&AndroidBridge.notifyBackground();}catch(e){} }; window.notifyAppForeground=()=>{ try{AndroidBridge.notifyForeground&&AndroidBridge.notifyForeground();}catch(e){} }; }
+    // 周期检查消息提醒（纯本地）
+    checkReminders(); setInterval(checkReminders, 30000);
   }
 }
 boot();
