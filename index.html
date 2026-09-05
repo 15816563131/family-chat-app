@@ -203,6 +203,14 @@
   .fav-item .fa span{cursor:pointer}
   .emoji-recent{display:flex;flex-wrap:wrap;gap:4px;padding:6px 10px;border-bottom:1px solid var(--wx-line);background:var(--wx-panel)}
   .emoji-recent span{font-size:20px;width:30px;height:30px;display:flex;align-items:center;justify-content:center;cursor:pointer}
+  /* 回到最新 悬浮按钮 */
+  .jump-latest{position:absolute;right:14px;bottom:74px;width:42px;height:42px;border-radius:50%;background:var(--wx-card);box-shadow:0 2px 10px rgba(0,0,0,.28);display:none;align-items:center;justify-content:center;font-size:20px;color:var(--wx-green);cursor:pointer;z-index:12;border:1px solid var(--wx-line)}
+  .jump-latest.show{display:flex}
+  .jl-badge{position:absolute;top:-6px;right:-6px;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--wx-red);color:#fff;font-size:11px;display:flex;align-items:center;justify-content:center;border:2px solid var(--wx-card)}
+  /* 拍一拍 居中系统提示 */
+  .row.sys{justify-content:center;margin:6px 4px}
+  .sys-line{background:rgba(0,0,0,.06);color:var(--wx-muted);font-size:12px;padding:3px 10px;border-radius:6px;max-width:80%;text-align:center}
+  [data-theme="dark"] .sys-line{background:rgba(255,255,255,.08);color:#aaa}
 </style>
 </head>
 <body>
@@ -237,6 +245,7 @@
     <div class="typing-bar" id="typingBar"><span id="typingName">对方</span> 正在输入<span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
     <div class="search-banner" id="searchBanner"><span id="searchInfo">搜索</span><span class="clear" id="searchClear">清除</span></div>
     <div class="messages" id="messages"></div>
+    <div class="jump-latest" id="jumpLatest"><span class="jl-badge" id="jumpNew" style="display:none">0</span>↓</div>
     <div class="at-pop" id="atPop"></div>
     <div class="quote-bar" id="quoteBar"><div class="qb-text" id="qbText"></div><div class="qb-close" id="qbClose">✕</div></div>
     <div class="emoji-panel" id="emojiPanel"></div>
@@ -359,15 +368,26 @@ function fmtTime(ts){
   if(d.toDateString()===yest.toDateString()) return "昨天 "+hm;
   return (d.getMonth()+1)+"月"+d.getDate()+"日 "+hm;
 }
+function sameDayTs(a,b){ return a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate(); }
+function weekdayName(d){ const w=["周日","周一","周二","周三","周四","周五","周六"]; return w[d.getDay()]; }
 function fmtDivider(ts){
   const d=new Date(ts*1000), now=new Date();
   const pad=n=>String(n).padStart(2,"0");
   const hm=pad(d.getHours())+":"+pad(d.getMinutes());
-  const sameDay=d.toDateString()===now.toDateString();
-  if(sameDay) return hm;
-  return (d.getMonth()+1)+"月"+d.getDate()+"日 "+hm;
+  const y=new Date(now); y.setDate(now.getDate()-1);
+  if(sameDayTs(d,now)) return "今天 "+hm;
+  if(sameDayTs(d,y)) return "昨天 "+hm;
+  const diff=Math.floor((new Date(now.getFullYear(),now.getMonth(),now.getDate()).getTime()-new Date(d.getFullYear(),d.getMonth(),d.getDate()).getTime())/86400000);
+  if(diff<=7) return weekdayName(d)+" "+hm;
+  if(d.getFullYear()===now.getFullYear()) return (d.getMonth()+1)+"月"+d.getDate()+"日 "+hm;
+  return d.getFullYear()+"年"+(d.getMonth()+1)+"月"+d.getDate()+"日 "+hm;
 }
-function needDivider(prev,cur){ if(!prev) return true; return (cur.time-prev.time) > 180; }
+// 同天或间隔>5分钟才显示时间分割线（微信式）
+function needDivider(prev,cur){
+  if(!prev) return true;
+  if(!sameDayTs(new Date(prev.time*1000), new Date(cur.time*1000))) return true;
+  return (cur.time-prev.time) > 300;
+}
 function toast(msg){
   const t=$("toast"); t.textContent=msg; t.classList.add("show");
   clearTimeout(toast._t); toast._t=setTimeout(()=>t.classList.remove("show"),1400);
@@ -412,6 +432,9 @@ function handleIncoming(topic, m, fromHistory){
     return;
   }
   const sender = (tags&&tags[0])||"";
+  // 拍一拍 控制消息：仅对方发来的渲染（自己的回声在此前已本地渲染）
+  const patTagIdx = (tags||[]).findIndex(t=>typeof t==="string" && t.indexOf("pat_")===0);
+  if(patTagIdx>=0){ if(sender!==uid){ try{ const p=JSON.parse(m.message||"{}"); addPatLine(topic, p.from, p.to); }catch(e){} } return; }
   if(sender===uid) return; // 跳过自己（含撤回/打字回声）
   // 撤回控制消息：tags 含 recall_<id>
   const recallTag = tags.find(t=>typeof t==="string" && t.indexOf("recall_")===0);
@@ -467,7 +490,7 @@ function addLocalMsg(topic, msg, opts){
 
   const chat=getChat(topic);
   if(chat){
-    chat.lastMsg = (msg.self?"":msg.name+": ")+msg.text;
+    chat.lastMsg = (msg.type==="pat") ? msg.text : ((msg.self?"":msg.name+": ")+msg.text);
     chat.lastTime = msg.time;
     const visibleNow = (topic===activeTopic && !document.hidden);
     if(!opts.silentUnread && !visibleNow) chat.unread=(chat.unread||0)+1;
@@ -475,7 +498,11 @@ function addLocalMsg(topic, msg, opts){
     chat.order=Date.now();
     saveChats();
   }
-  if(topic===activeTopic){ appendBubble(msg); scrollBottom(); }
+  if(topic===activeTopic){
+    appendBubble(msg);
+    if(atBottom) scrollBottom();
+    else if(!msg.self){ newCount++; updateJumpBadge(); }
+  }
   renderChats();
   updateTabBadge();
   // 后台通知：APK 内由原生层统一弹系统通知，避免重复；浏览器 PWA 用 Web Notification；免打扰不通知
@@ -581,6 +608,7 @@ function openChat(topic){
   activeTopic=topic;
   c.unread=0; c.atMe=false; saveChats(); renderChats(); updateTabBadge();
   replyingTo=null; hideQuoteBar();
+  newCount=0; updateJumpBadge(); const jb2=$("jumpLatest"); if(jb2) jb2.classList.remove("show"); atBottom=true;
   searchInChat=""; renderSearchBanner();
   $("chatTitle").textContent = c.name;
   renderChatFull(topic);
@@ -600,9 +628,11 @@ function renderChatFull(topic){
     box.appendChild(bubbleEl(m));
     prev=m;
   });
+  newCount=0; updateJumpBadge(); const jb=$("jumpLatest"); if(jb) jb.classList.remove("show"); atBottom=true;
   scrollBottom();
 }
 function bubbleEl(m){
+  if(m.type==="pat"){ return patLineEl(m.text); }
   const row=document.createElement("div"); row.className="row "+(m.self?"me":"other");
   const c=activeTopic?getChat(activeTopic):null;
   const av=document.createElement("div"); av.className="av";
@@ -614,6 +644,7 @@ function bubbleEl(m){
     b.appendChild(q); }
   const tx=document.createElement("div"); tx.innerHTML=highlightAt(escapeHtml(m.text||"")); b.appendChild(tx);
   row.appendChild(av); row.appendChild(b);
+  av.addEventListener("dblclick",(e)=>{ e.preventDefault(); doPat(m.self?(myName||"我"):(m.name||"对方")); });
   // 自己消息的发送状态（发送中/失败重发）
   if(m.self){
     const st=document.createElement("div"); st.className="st"+(m.status==="failed"?" fail":"");
@@ -623,6 +654,11 @@ function bubbleEl(m){
   }
   attachLongPress(row, ()=>showMsgMenu(m));
   return row;
+}
+function patLineEl(text){
+  const d=document.createElement("div"); d.className="row sys";
+  const s=document.createElement("div"); s.className="sys-line"; s.textContent=text;
+  d.appendChild(s); return d;
 }
 
 // 高亮 @名字（@自己 用红色）
@@ -670,6 +706,7 @@ function showMsgMenu(m){
   if(m.text) opts.push({label:"回复", fn:()=>doReply(m)});
   if(m.text) opts.push({label:"转发", fn:()=>forwardMessage(m)});
   if(m.text) opts.push({label:"收藏", fn:()=>addFav(m)});
+  opts.push({label:"拍一拍", fn:()=>doPat(m.self?(myName||"我"):(m.name||"对方"))});
   const canRecall = m.self && (Date.now()/1000 - (m.time||0)) < 120;
   if(canRecall) opts.push({label:"撤回", fn:()=>doRecall(m)});
   opts.push({label:"删除", danger:true, fn:()=>{ recallMessage(activeTopic, m.id); toast("已删除"); }});
@@ -686,6 +723,7 @@ function doReply(m){
 }
 function hideQuoteBar(){ replyingTo=null; const qb=$("quoteBar"); if(qb) qb.classList.remove("show"); }
 $("qbClose").onclick=hideQuoteBar;
+$("jumpLatest").onclick=()=>{ scrollBottom(); };
 
 // 转发到其他会话
 function forwardMessage(m){
@@ -723,6 +761,17 @@ function openFavs(){
   });
 }
 
+// 拍一拍
+function addPatLine(topic, from, to){
+  const text = (from||"有人") + " 拍了拍 " + (to||"你");
+  addLocalMsg(topic, {id:"pat-"+Date.now()+"-"+Math.random().toString(36).slice(2,5), sender:"", name:"", text, type:"pat", time:Date.now()/1000, self:false}, {silentUnread:true});
+}
+function doPat(name){
+  name = name || "对方";
+  const from = myName || "我";
+  addPatLine(activeTopic, from, name);
+  try{ fetch(BASE+"/"+activeTopic, {method:"POST", headers:{ "Title":"pat", "Tags": uid+",pat_"+activeTopic, "Priority":"min" }, body: JSON.stringify({from, to:name})}); }catch(e){}
+}
 function doRecall(m){
   // 本地先移除
   recallMessage(activeTopic, m.id);
@@ -739,7 +788,17 @@ function appendBubble(m){
   if(needDivider(prev,m)){ const d=document.createElement("div"); d.className="divider"; d.textContent=fmtDivider(m.time); box.appendChild(d); }
   box.appendChild(bubbleEl(m));
 }
+let atBottom=true, newCount=0;
 function scrollBottom(){ const b=$("messages"); b.scrollTop=b.scrollHeight; }
+function isAtBottom(){ const b=$("messages"); return b.scrollHeight - b.scrollTop - b.clientHeight < 40; }
+function updateJumpBadge(){ const b=$("jumpNew"); if(!b) return; if(newCount>0){ b.style.display="flex"; b.textContent=newCount>99?"99+":newCount; } else b.style.display="none"; }
+function onMsgScroll(){
+  if(!$("messages")) return;
+  atBottom=isAtBottom();
+  const btn=$("jumpLatest");
+  if(atBottom){ if(btn) btn.classList.remove("show"); newCount=0; updateJumpBadge(); }
+  else if(btn) btn.classList.add("show");
+}
 
 // ---------- 屏幕切换 ----------
 function showScreen(id){
@@ -1072,6 +1131,7 @@ function afterName(){
   applyTheme();
   applyFont();
   renderChats(); renderMe(); updateTabBadge();
+  const mb=$("messages"); if(mb) mb.addEventListener("scroll", onMsgScroll);
   connectAll(); syncNative();
   // 通知权限
   if("Notification" in window && Notification.permission==="default") Notification.requestPermission().then(p=>{ const v=$("notifV"); if(v) v.textContent=(p==="granted"?"开启":"已关闭"); });
