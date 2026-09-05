@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>家聊</title>
 <link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="apple-touch-icon" sizes="192x192" href="icon-192.png">
+<meta name="theme-color" content="#07C160">
 <style>
   :root{
     --wx-green:#07C160; --wx-green-dark:#06A652;
@@ -233,6 +236,35 @@
   .row.sys{justify-content:center;margin:6px 4px}
   .sys-line{background:rgba(0,0,0,.06);color:var(--wx-muted);font-size:12px;padding:3px 10px;border-radius:6px;max-width:80%;text-align:center}
   [data-theme="dark"] .sys-line{background:rgba(255,255,255,.08);color:#aaa}
+  /* 群信息面板（点群名打开） */
+  #chatScreen[data-group="1"] #chatTitle{cursor:pointer}
+  .gi{padding:8px 16px 8px;max-height:78vh;overflow-y:auto;-webkit-overflow-scrolling:touch}
+  .gi-head{display:flex;align-items:center;justify-content:center;gap:8px;padding:8px 0 14px}
+  .gi-name{font-size:20px;font-weight:600;color:var(--wx-text);max-width:60vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .gi-edit{font-size:13px;color:var(--wx-blue);cursor:pointer;padding:2px 8px;border-radius:4px}
+  .gi-edit:active{background:var(--wx-active)}
+  .gi-sec{font-size:12px;color:var(--wx-muted);padding:10px 4px 6px}
+  .gi-members{background:var(--wx-card);border-radius:10px;overflow:hidden;border:1px solid var(--wx-line)}
+  [data-theme="dark"] .gi-members{background:rgba(30,36,54,.72);border-color:rgba(255,255,255,.14)}
+  .gi-row{display:flex;align-items:center;gap:10px;padding:10px 12px;border-top:1px solid var(--wx-line)}
+  .gi-row:first-child{border-top:none}
+  [data-theme="dark"] .gi-row{border-top-color:rgba(255,255,255,.12)}
+  .gi-av{width:36px;height:36px;border-radius:6px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:16px;font-weight:600;flex:0 0 auto}
+  .gi-info{flex:1;min-width:0}
+  .gi-mname{font-size:15px;color:var(--wx-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .gi-muid{font-size:11px;color:var(--wx-muted);margin-top:2px;font-family:monospace}
+  .gi-kick{font-size:13px;color:var(--wx-red);cursor:pointer;padding:4px 10px;border-radius:4px;flex:0 0 auto}
+  .gi-kick:active{background:var(--wx-active)}
+  .gi-act{display:flex;gap:10px;padding:14px 0 8px}
+  .gi-act button{flex:1;padding:10px;border-radius:8px;border:1px solid var(--wx-line);background:var(--wx-card);font-size:15px;color:var(--wx-text);cursor:pointer}
+  [data-theme="dark"] .gi-act button{background:rgba(30,36,54,.72);border-color:rgba(255,255,255,.14)}
+  .gi-act button:active{background:var(--wx-active)}
+  .gi-leave{padding:12px;margin-top:6px;background:var(--wx-card);border-radius:8px;text-align:center;font-size:15px;color:var(--wx-red);cursor:pointer;border:1px solid var(--wx-line)}
+  [data-theme="dark"] .gi-leave{background:rgba(30,36,54,.72);border-color:rgba(255,255,255,.14)}
+  .gi-leave:active{background:var(--wx-active)}
+  .gi-close{padding:12px;margin-top:8px;background:var(--wx-card);border-radius:8px;text-align:center;font-size:15px;color:var(--wx-text);cursor:pointer;border:1px solid var(--wx-line)}
+  [data-theme="dark"] .gi-close{background:rgba(30,36,54,.72);border-color:rgba(255,255,255,.14)}
+  .gi-close:active{background:var(--wx-active)}
   /* 聊天置顶消息横幅 */
   .pin-bar{display:none;align-items:center;background:#fffbe6;border-top:1px solid var(--wx-line);border-bottom:1px solid var(--wx-line);padding:6px 10px;font-size:13px;color:#8a6d3b;flex:0 0 auto}
   .pin-bar.show{display:flex}
@@ -974,6 +1006,13 @@ function handleIncoming(topic, m, fromHistory){
     }
     return;
   }
+  // 群成员控制：改名 / 移除 / 退出（Sender 是操作者，自己发出则被下面 sender===uid 跳过，避免重复应用）
+  const renameTag = tags.find(t=>typeof t==="string" && t.indexOf("rename_")===0);
+  if(renameTag){ if(sender!==uid){ applyGroupRename(topic, decTitle(m.message)||"", false); } return; }
+  const kickTag = tags.find(t=>typeof t==="string" && t.indexOf("kick_")===0);
+  if(kickTag){ if(sender!==uid){ applyGroupKick(topic, m.message||"", false); } return; }
+  const leaveTag = tags.find(t=>typeof t==="string" && t.indexOf("leave_")===0);
+  if(leaveTag){ if(sender!==uid){ applyGroupLeave(topic, m.message||"", false); } return; }
   if(sender===uid) return; // 跳过自己（含撤回/打字回声）
   // 撤回控制消息：tags 含 recall_<id>
   const recallTag = tags.find(t=>typeof t==="string" && t.indexOf("recall_")===0);
@@ -1301,6 +1340,7 @@ function openChat(topic){
   newCount=0; updateJumpBadge(); const jb2=$("jumpLatest"); if(jb2) jb2.classList.remove("show"); atBottom=true;
   searchInChat=""; renderSearchBanner();
   $("chatTitle").textContent = (c.type==="group") ? (c.name+"（"+(c.members?c.members.length:1)+"）") : c.name;
+  $("chatScreen").dataset.group = (c.type==="group")?"1":"0";
   renderPin();
   newMsgFrom = c.lastSeen||0;
   showNewDivider = hadUnread && newMsgFrom>0;
@@ -2041,6 +2081,107 @@ function showInvite(c){
   $("dCopyCode").onclick=()=>copyText(c.topic,"邀请码已复制");
   $("dCopyLink").onclick=()=>copyText(link,"邀请链接已复制");
 }
+
+// ---------- 群信息 / 成员管理 ----------
+function openGroupInfo(c){
+  if(!c || c.type!=="group") return;
+  const s=$("sheet"); s.innerHTML = buildGroupInfoHTML(c);
+  bindGroupInfo(c, s);
+  $("sheetMask").classList.add("show");
+}
+function closeGroupInfo(){ $("sheetMask").classList.remove("show"); }
+function buildGroupInfoHTML(c){
+  const mems = c.members || [];
+  const rows = mems.map(m=>{
+    const nm = escapeHtml(m.name||"成员");
+    const uidStr = escapeHtml(m.uid||"");
+    const ch = ((m.name||m.uid||"?").trim().charAt(0)||"?").toUpperCase();
+    const bg = colorFrom(m.uid||m.name||"x");
+    const isSelf = m.uid===uid;
+    return `<div class="gi-row" data-uid="${uidStr}">
+      <div class="gi-av" style="background:${bg}">${escapeHtml(ch)}</div>
+      <div class="gi-info"><div class="gi-mname">${nm}${isSelf?'（我）':''}</div><div class="gi-muid">家聊号 ${uidStr}</div></div>
+      ${isSelf?'':`<div class="gi-kick" data-act="kick">移除</div>`}
+    </div>`;
+  }).join("");
+  return `
+    <div class="gi">
+      <div class="gi-head">
+        <div class="gi-name" id="giName">${escapeHtml(c.name)}</div>
+        <div class="gi-edit" id="giEdit">✎ 编辑</div>
+      </div>
+      <div class="gi-sec">成员 ${mems.length} 人</div>
+      <div class="gi-members">${rows||'<div class="gi-row"><div class="gi-info"><div class="gi-mname">暂无成员</div></div></div>'}</div>
+      <div class="gi-act"><button id="giInvite">+ 邀请家人加入</button></div>
+      <div class="gi-leave" id="giLeave">退出群聊</div>
+      <div class="gi-close" id="giClose">关闭</div>
+    </div>`;
+}
+function bindGroupInfo(c, root){
+  if($("giEdit",root)) $("giEdit",root).onclick=()=>{
+    promptDialog("修改群名称","给群聊起个新名字", c.name, (nn)=>{
+      nn=(nn||"").trim(); if(!nn || nn===c.name) return;
+      const old=c.name; c.name=nn; saveChats(); renderChats();
+      if(activeTopic===c.topic) $("chatTitle").textContent = c.name+"（"+(c.members?c.members.length:1)+"）";
+      sendGroupCtrl(c.topic, "rename", encTitle(nn));
+      addLocalMsg(c.topic, {id:"sysr-"+Date.now(), sender:uid, name:"", text:`「${old}」改名为「${nn}」`, type:"sysrec", time:Date.now()/1000, self:false});
+    });
+  };
+  if($("giInvite",root)) $("giInvite",root).onclick=()=>{ closeGroupInfo(); showInvite(c); };
+  if($("giLeave",root)) $("giLeave",root).onclick=()=>{
+    confirmDialog("退出群聊","确定要退出「"+c.name+"」吗？退出后将不再接收该群消息。",()=>{
+      sendGroupCtrl(c.topic, "leave", uid);
+      deleteChat(c.topic);
+    });
+  };
+  if($("giClose",root)) $("giClose",root).onclick=closeGroupInfo;
+  root.querySelectorAll('[data-act="kick"]').forEach(el=>{
+    el.onclick=()=>{
+      const tuid = el.parentElement.dataset.uid;
+      const m = (c.members||[]).find(x=>x.uid===tuid);
+      const mn = m?(m.name||"成员"):"该成员";
+      confirmDialog("移除成员","确定将「"+mn+"」移出群聊吗？",()=>{
+        const mem=c.members||[]; c.members = mem.filter(x=>x.uid!==tuid); saveChats(); renderChats();
+        if(activeTopic===c.topic) $("chatTitle").textContent = c.name+"（"+(c.members?c.members.length:1)+"）";
+        sendGroupCtrl(c.topic, "kick", tuid);
+        addLocalMsg(c.topic, {id:"sysk-"+Date.now(), sender:uid, name:"", text:`${mn} 被移出群聊`, type:"sysrec", time:Date.now()/1000, self:false});
+      });
+    };
+  });
+}
+function sendGroupCtrl(topic, kind, body){
+  try{ fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":"grp", "Tags": uid+","+kind+"_"+topic, "Priority":"min" }, body:String(body==null?"":body)}); }catch(e){}
+}
+function applyGroupRename(topic, newName, bySelf){
+  const c=getChat(topic); if(!c || !newName) return;
+  const old=c.name; if(old===newName) return;
+  c.name=newName; saveChats(); renderChats();
+  if(activeTopic===topic) $("chatTitle").textContent = c.name+"（"+(c.members?c.members.length:1)+"）";
+  addLocalMsg(topic, {id:"sysr-"+Date.now()+"-"+Math.random().toString(36).slice(2,5), sender:uid, name:"", text:`「${old}」改名为「${newName}」`, type:"sysrec", time:Date.now()/1000, self:false});
+}
+function applyGroupKick(topic, kickedUid, bySelf){
+  const c=getChat(topic); if(!c) return;
+  const mem=c.members||[];
+  const m=mem.find(x=>x.uid===kickedUid);
+  const mn = m?(m.name||"成员"):"成员";
+  c.members = mem.filter(x=>x.uid!==kickedUid); saveChats(); renderChats();
+  if(activeTopic===topic) $("chatTitle").textContent = c.name+"（"+(c.members?c.members.length:1)+"）";
+  if(kickedUid===uid){
+    toast("你已被移出群聊");
+    setTimeout(()=>deleteChat(topic), 600);
+    return;
+  }
+  addLocalMsg(topic, {id:"sysk-"+Date.now()+"-"+Math.random().toString(36).slice(2,5), sender:uid, name:"", text:`${mn} 被移出群聊`, type:"sysrec", time:Date.now()/1000, self:false});
+}
+function applyGroupLeave(topic, leftUid){
+  const c=getChat(topic); if(!c) return;
+  const mem=c.members||[];
+  const m=mem.find(x=>x.uid===leftUid);
+  const mn = m?(m.name||"成员"):"成员";
+  c.members = mem.filter(x=>x.uid!==leftUid); saveChats(); renderChats();
+  if(activeTopic===topic) $("chatTitle").textContent = c.name+"（"+(c.members?c.members.length:1)+"）";
+  addLocalMsg(topic, {id:"sysl-"+Date.now()+"-"+Math.random().toString(36).slice(2,5), sender:uid, name:"", text:`${mn} 退出了群聊`, type:"sysrec", time:Date.now()/1000, self:false});
+}
 function renameChat(c){
   promptDialog("修改名称","聊天显示名称：",c.name,(name)=>{
     name=(name||"").trim(); if(!name) return;
@@ -2291,6 +2432,8 @@ function afterName(){
   applyBg();
   renderChats(); renderMe(); updateTabBadge();
   const mb=$("messages"); if(mb && !appBooted) mb.addEventListener("scroll", onMsgScroll);
+  // 点击群名 → 群信息/成员管理
+  $("chatTitle").onclick=()=>{ const c=getChat(activeTopic); if(c && c.type==="group") openGroupInfo(c); };
   connectAll(); syncNative();
   if(!appBooted){
     appBooted=true;
