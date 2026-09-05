@@ -138,6 +138,7 @@
   .bubble.img::before{display:none}
   .bubble.img img{display:block;max-width:160px;max-height:180px;border-radius:8px}
   .bubble.img .img-expired{font-size:12px;color:#999;padding:8px;line-height:1.4}
+  .bubble .sender-name{font-size:11px;color:#07C160;margin-bottom:3px;line-height:1.2}
   /* 语音消息气泡 */
   .bubble.voice{display:flex;align-items:center;gap:10px;min-width:120px;max-width:62%}
   .bubble.voice::before{display:none}
@@ -801,7 +802,7 @@ if(chats===null){
   lsSet("fc_chats", chats);
 }
 function mkChat(name, topic){
-  return { name, topic, color: colorFrom(topic), unread:0, lastMsg:"", lastTime:0, order:Date.now(), pinned:false, mute:false };
+  return { name, topic, color: colorFrom(topic), type:"single", members:[], unread:0, lastMsg:"", lastTime:0, order:Date.now(), pinned:false, mute:false };
 }
 function colorFrom(str){ let h=0; for(let i=0;i<str.length;i++) h=(h*31+str.charCodeAt(i))>>>0; return PAL[h%PAL.length]; }
 function saveChats(){ lsSet("fc_chats", chats); }
@@ -995,6 +996,10 @@ function addLocalMsg(topic, msg, opts){
 
   const chat=getChat(topic);
   if(chat){
+    if(!chat.members) chat.members=[];
+    const _su = msg.self ? uid : (msg.sender||"");
+    const _sn = msg.self ? (myName||"我") : (msg.name||"家人");
+    if(_su && !chat.members.some(x=>x.uid===_su)) chat.members.push({uid:_su, name:_sn});
     chat.lastMsg = (msg.type==="pat") ? msg.text : (msg.type==="voice") ? ((msg.self?"":msg.name+": ")+"[语音]") : (msg.type==="image") ? ((msg.self?"":msg.name+": ")+"[图片]") : (msg.merge ? ((msg.self?"":msg.name+": ")+"[聊天记录]") : ((msg.self?"":msg.name+": ")+msg.text));
     chat.lastTime = msg.time;
     const visibleNow = (topic===activeTopic && !document.hidden);
@@ -1101,6 +1106,7 @@ function voiceBubble(m){
   av.style.background = m.self? "#07C160" : (c?c.color:colorFrom(m.sender||m.name));
   av.textContent = avatarText(m.self?(myName||"我"):(m.name||"对方"));
   const b=document.createElement("div"); b.className="bubble voice";
+  appendSenderName(b, m);
   const play=document.createElement("div"); play.className="voice-play"; play.textContent="▶";
   const dur=document.createElement("div"); dur.className="voice-dur"; dur.textContent=(m.dur||0)+"″";
   b.appendChild(play); b.appendChild(dur);
@@ -1237,7 +1243,7 @@ function openChat(topic){
   replyingTo=null; hideQuoteBar();
   newCount=0; updateJumpBadge(); const jb2=$("jumpLatest"); if(jb2) jb2.classList.remove("show"); atBottom=true;
   searchInChat=""; renderSearchBanner();
-  $("chatTitle").textContent = c.name;
+  $("chatTitle").textContent = (c.type==="group") ? (c.name+"（"+(c.members?c.members.length:1)+"）") : c.name;
   renderPin();
   newMsgFrom = c.lastSeen||0;
   showNewDivider = hadUnread && newMsgFrom>0;
@@ -1267,6 +1273,10 @@ function renderChatFull(topic){
   newCount=0; updateJumpBadge(); const jb=$("jumpLatest"); if(jb) jb.classList.remove("show"); atBottom=true;
   scrollBottom();
 }
+function appendSenderName(b, m){
+  const c=activeTopic?getChat(activeTopic):null;
+  if(c && c.type==="group" && !m.self && m.name){ const sn=document.createElement("div"); sn.className="sender-name"; sn.textContent=m.name; b.appendChild(sn); }
+}
 function bubbleEl(m){
   if(m.type==="pat"||m.type==="sysrec"){ return patLineEl(m.text); }
   if(m.type==="image"){ return imageBubble(m); }
@@ -1279,6 +1289,7 @@ function bubbleEl(m){
   av.style.background = m.self? "#07C160" : (c?c.color:colorFrom(m.sender||m.name));
   av.textContent = avatarText(m.self?(myName||"我"):(m.name||"对方"));
   const b=document.createElement("div"); b.className="bubble";
+  appendSenderName(b, m);
   if(m.quote){ const q=document.createElement("div"); q.className="quote";
     q.innerHTML='<div class="qn">'+escapeHtml(m.quote.name||"")+'</div><div class="qt">'+highlightAt(escapeHtml(m.quote.text||""))+'</div>';
     if(m.quote.i){ q.dataset.qid=m.quote.i; q.onclick=()=>{ if(selectMode) return; const el=document.querySelector('#messages .row[data-id="'+m.quote.i+'"]'); if(el) el.scrollIntoView({block:"center"}); else toast("原消息已不可见"); }; }
@@ -1341,6 +1352,7 @@ function imageBubble(m){
   av.style.background = m.self? "#07C160" : (c?c.color:colorFrom(m.sender||m.name));
   av.textContent = avatarText(m.self?(myName||"我"):(m.name||"对方"));
   const b=document.createElement("div"); b.className="bubble img";
+  appendSenderName(b, m);
   const im=document.createElement("img"); im.src=m.img||""; b.appendChild(im);
   im.onerror=()=>{ const d=document.createElement("div"); d.className="img-expired"; d.textContent="图片已过期或不可见"; if(im.parentNode) im.parentNode.replaceChild(d, im); };
   row.appendChild(av); row.appendChild(b);
@@ -1920,9 +1932,22 @@ function deleteChat(topic){
 // 发起/加入
 function openAddDialog(){
   openSheet([
+    {label:"发起群聊", fn:()=>createGroup()},
     {label:"发起新聊天", fn:()=>createChat()},
     {label:"加入已有聊天", fn:()=>joinChat()},
   ]);
+}
+function createGroup(){
+  promptDialog("发起群聊","给群聊起个名字（如：一家老小）","",(name)=>{
+    name=(name||"").trim()||"群聊";
+    const topic = "fg"+Math.random().toString(36).slice(2,12);
+    const c=mkChat(name, topic); c.type="group";
+    c.members=[{uid:uid, name:myName||"我"}];
+    chats.unshift(c); saveChats(); syncNative();
+    connectTopic(topic); renderChats(); updateTabBadge();
+    showInvite(c);
+    toast("群聊已创建，把邀请发给家人即可多人聊天");
+  });
 }
 function createChat(){
   promptDialog("发起新聊天","给这个聊天起个名字（如：家庭群聊）","",(name)=>{
@@ -1942,6 +1967,7 @@ function joinChat(){
     if(!code) { toast("邀请码无效"); return; }
     if(chats.some(c=>c.topic===code)){ toast("已在列表中"); openChat(code); return; }
     const c=mkChat("家人", code); chats.unshift(c); saveChats(); syncNative();
+    if(code.indexOf("fg")===0){ c.type="group"; c.members=[{uid:uid, name:myName||"我"}]; }
     connectTopic(code); loadHistory(code); renderChats(); updateTabBadge();
     setTimeout(()=>openChat(code),300);
   }, true);
