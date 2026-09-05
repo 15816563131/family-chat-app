@@ -864,20 +864,68 @@ function toast(msg){
 }
 function avatarText(name){ return (name||"?").trim().charAt(0) || "?"; }
 
-// ---------- 连接管理（每会话一个 SSE） ----------
-const esMap = {};
-function connectTopic(topic){
-  if(esMap[topic]) return;
-  loadHistory(topic);
-  try{
-    const es = new EventSource(BASE+"/"+topic+"/sse");
-    es.onmessage = (e)=>{ try{ handleIncoming(topic, JSON.parse(e.data)); }catch(_){} };
-    es.onerror = ()=>{ /* 浏览器会自动重连 */ };
-    esMap[topic] = es;
-    shareSubscription(topic);
-  }catch(e){}
+// ---------- 连接管理（统一 SSE：多 topic 合并为单连接，规避 ntfy 限流 429） ----------
+let esConn = null;            // 当前统一 EventSource
+let esBackoff = 1000;         // 重连退避（毫秒，指数增长，封顶 30s）
+let esReconnectTimer = null;
+let esAlive = false;
+
+function closeUnified(){
+  if(esReconnectTimer){ clearTimeout(esReconnectTimer); esReconnectTimer=null; }
+  if(esConn){ try{ esConn.onopen=null; esConn.onmessage=null; esConn.onerror=null; esConn.close(); }catch(e){} esConn=null; }
+  esAlive=false;
 }
-function connectAll(){ chats.forEach(c=>connectTopic(c.topic)); }
+// 把所有会话 topic 拼成 ntfy 多 topic SSE（/t1/t2/t3/sse，ntfy 原生支持，单连接覆盖多房间）
+function buildSseUrl(){
+  const topics = chats.map(c=>c.topic).filter(Boolean);
+  if(!topics.length) return null;
+  return BASE + "/" + topics.join("/") + "/sse";
+}
+function ensureConnection(){
+  const url = buildSseUrl();
+  if(!url) return;
+  if(esConn && esConn._url===url) return; // topic 集合未变，无需重建
+  closeUnified();
+  try{
+    const es = new EventSource(url);
+    es._url = url;
+    es.onopen = ()=>{ esBackoff=1000; esAlive=true; };
+    es.onmessage = (e)=>{
+      try{
+        const m = JSON.parse(e.data);
+        esBackoff=1000; esAlive=true;
+        const t = (m && m.topic) || (chats[0] && chats[0].topic);
+        if(t) handleIncoming(t, m);
+      }catch(_){}
+    };
+    es.onerror = ()=>{
+      // 浏览器会自动重连；再叠一层指数退避，避免 429 时被瞬间疯狂重连拖垮
+      try{ es.close(); }catch(e){}
+      esConn=null; esAlive=false;
+      scheduleReconnect();
+    };
+    esConn = es;
+  }catch(e){ scheduleReconnect(); }
+}
+function scheduleReconnect(){
+  if(esReconnectTimer) return;
+  esReconnectTimer = setTimeout(()=>{
+    esReconnectTimer=null;
+    if(!esAlive) ensureConnection();
+  }, esBackoff);
+  esBackoff = Math.min(esBackoff*2, 30000);
+}
+// 新增/加入会话：确保统一连接覆盖该 topic，并注册 Web Push 订阅
+function connectTopic(topic){
+  ensureConnection();
+  try{ shareSubscription(topic); }catch(e){}
+}
+// 全量连接：错峰拉取各会话历史 + 建立统一 SSE
+function connectAll(){
+  const topics = chats.map(c=>c.topic).filter(Boolean);
+  topics.forEach((t,i)=> setTimeout(()=>{ if(document.visibilityState!=="hidden") loadHistory(t); }, i*400));
+  ensureConnection();
+}
 function loadHistory(topic){
   const since = getLast(topic);
   fetch(BASE+"/"+topic+"/json?since="+since).then(r=>r.json()).then(arr=>{
@@ -1924,7 +1972,7 @@ $("chatMore").onclick=()=>{
 
 function deleteChat(topic){
   chats = chats.filter(c=>c.topic!==topic);
-  if(esMap[topic]){ try{esMap[topic].close();}catch(e){} delete esMap[topic]; }
+  closeUnified(); ensureConnection(); // 重建统一 SSE，剔除已删会话
   saveChats(); syncNative(); updateTabBadge();
   activeTopic=null; showScreen("screenChats"); renderChats();
 }
@@ -2242,8 +2290,8 @@ function afterName(){
     if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
     // 解锁音频上下文（浏览器自动播放策略要求用户手势后才能发声）
     ["click","touchstart","keydown"].forEach(ev=>document.addEventListener(ev, _unlockAudio, {passive:true, once:true}));
-    // 周期性重新拉取历史（SSE 断线兜底）
-    setInterval(()=>{ if(document.visibilityState==="visible"){ chats.forEach(c=>loadHistory(c.topic)); } }, 30000);
+    // 周期性重新拉取历史（SSE 断线兜底）：拉长为 60s 并错峰，避免瞬间 N 个请求触发 ntfy 429
+    setInterval(()=>{ if(document.visibilityState==="visible"){ chats.forEach((c,i)=> setTimeout(()=>loadHistory(c.topic), i*500)); } }, 60000);
     // 周期性广播自己的 Web Push 订阅（便于其他浏览器端推送）
     setInterval(()=>{ chats.forEach(c=>shareSubscription(c.topic)); }, 60000);
     // 页面显隐时刷新未读
