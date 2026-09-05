@@ -698,6 +698,11 @@ const BASE = "https://ntfy.sh";
 const $ = (id)=>document.getElementById(id);
 const PAL = ["#07C160","#10AEFF","#FF9C19","#FA5151","#6467EF","#13C2C2","#EB2EFF","#FF6B9D","#07C160","#5C6BC0"];
 
+// ntfy 的 Title 头会进入 HTTP 头，浏览器强制 Latin-1（ISO-8859-1），中文等非 ASCII 会令 fetch 抛 TypeError。
+// 因此发送方昵称统一 encodeURIComponent 成纯 ASCII 再塞进 Title；接收方再用 decTitle 还原。
+function encTitle(s){ try{ return encodeURIComponent(s==null?"":String(s)); }catch(e){ return ""; } }
+function decTitle(s){ if(!s) return ""; try{ const d=decodeURIComponent(s); return d; }catch(e){ return s; } }
+
 function lsGet(k,d){ try{ const v=localStorage.getItem(k); return v==null?d:JSON.parse(v);}catch(e){return d;} }
 function lsSet(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch(e){} }
 
@@ -974,16 +979,16 @@ function handleIncoming(topic, m, fromHistory){
   const recallTag = tags.find(t=>typeof t==="string" && t.indexOf("recall_")===0);
   if(recallTag){ recallMessage(topic, recallTag.slice("recall_".length)); return; }
   // 打字指示器（仅实时消息，历史回放忽略）
-  if(tags.includes("typing") && !fromHistory){ showTyping(topic, m.title||"对方"); return; }
+  if(tags.includes("typing") && !fromHistory){ showTyping(topic, decTitle(m.title)||"对方"); return; }
   // 图片/表情/语音（ntfy 附件）
   if(m.attachment && m.attachment.url){
     const at=m.attachment; const nm=(at.name||"");
     if(nm.indexOf("voice-")===0){
       const dm=nm.match(/^voice-(\d+)\./); const dur=dm?parseInt(dm[1],10):0;
-      addLocalMsg(topic, {id:m.id, sender, name:m.title||"对方", text:"", voice:at.url, dur, time:(m.time||Date.now()/1000), self:false, type:"voice"}, {silentUnread:false});
+      addLocalMsg(topic, {id:m.id, sender, name:decTitle(m.title)||"对方", text:"", voice:at.url, dur, time:(m.time||Date.now()/1000), self:false, type:"voice"}, {silentUnread:false});
       tryUpgradeAttachment(topic, m.id, at.url, "voice");
     } else {
-      addLocalMsg(topic, {id:m.id, sender, name:m.title||"对方", text:"", img:at.url, w:0, h:0, time:(m.time||Date.now()/1000), self:false, type:"image"}, {silentUnread:false});
+      addLocalMsg(topic, {id:m.id, sender, name:decTitle(m.title)||"对方", text:"", img:at.url, w:0, h:0, time:(m.time||Date.now()/1000), self:false, type:"image"}, {silentUnread:false});
       tryUpgradeAttachment(topic, m.id, at.url, "image");
     }
     if(!fromHistory) playNewMsgCue(topic);
@@ -991,9 +996,9 @@ function handleIncoming(topic, m, fromHistory){
   }
   const parsed = parseQuote(m.message||"");
   const pm = parseMerge(parsed.text);
-  if(pm.ok){ addLocalMsg(topic, {id:m.id, sender, name:m.title||"对方", text:"", merge:pm.items, time:(m.time||Date.now()/1000), self:false, mentioned:false}, {silentUnread:false}); if(!fromHistory) playNewMsgCue(topic); return; }
+  if(pm.ok){ addLocalMsg(topic, {id:m.id, sender, name:decTitle(m.title)||"对方", text:"", merge:pm.items, time:(m.time||Date.now()/1000), self:false, mentioned:false}, {silentUnread:false}); if(!fromHistory) playNewMsgCue(topic); return; }
   const mentioned = !!myName && myName.length>0 && parsed.text.indexOf("@"+myName) >= 0;
-  addLocalMsg(topic, {id:m.id, sender, name:m.title||"对方", text:parsed.text, quote:parsed.quote, time:(m.time||Date.now()/1000), self:false, mentioned}, {silentUnread:false});
+  addLocalMsg(topic, {id:m.id, sender, name:decTitle(m.title)||"对方", text:parsed.text, quote:parsed.quote, time:(m.time||Date.now()/1000), self:false, mentioned}, {silentUnread:false});
   if(!fromHistory) playNewMsgCue(topic);
 }
 
@@ -1080,7 +1085,7 @@ async function sendMessage(topic, text, quote){
   const body = embedQuote(text, quote);
   addLocalMsg(topic, {id, sender:uid, name, text, quote:quote||null, time:Date.now()/1000, self:true, status:"sending"}, {silentUnread:true});
   try{
-    await fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":name, "Tags":uid, "Priority":"3" }, body:body});
+    await fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":encTitle(name), "Tags":uid, "Priority":"3" }, body:body});
     updateMsgStatus(topic, id, "delivered");
     // 给在线订阅者推 Web Push（页面关闭也能收）
     const subs = lsGet("fc_subs_"+topic, []);
@@ -1103,7 +1108,7 @@ async function sendImageMsg(topic, dataURL, w, h){
   addLocalMsg(topic, {id, sender:uid, name, img:dataURL, w:w||0, h:h||0, time:Date.now()/1000, self:true, type:"image", status:"sending"}, {silentUnread:true});
   try{
     const bin=dataURLToBytes(dataURL); if(!bin) throw new Error("encode");
-    await fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":name, "Tags":uid, "Priority":"3", "Content-Type":"image/jpeg", "X-Filename":"sticker.jpg" }, body:bin});
+    await fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":encTitle(name), "Tags":uid, "Priority":"3", "Content-Type":"image/jpeg", "X-Filename":"sticker.jpg" }, body:bin});
     updateMsgStatus(topic, id, "delivered");
     const subs=lsGet("fc_subs_"+topic, []); for(const s of subs){ if(window.FC_PUSH) FC_PUSH.sendPush(s, {title:name, body:"[图片]"}).catch(()=>{}); }
   }catch(e){ updateMsgStatus(topic, id, "failed"); toast("发送失败，点击重发"); }
@@ -1145,7 +1150,7 @@ async function sendVoiceMsg(topic, dataURL, mime, dur){
   addLocalMsg(topic, {id, sender:uid, name, voice:dataURL, dur, time:Date.now()/1000, self:true, type:"voice", status:"sending"}, {silentUnread:true});
   try{
     const blob=dataURLToBlob(dataURL); if(!blob) throw new Error("enc");
-    await fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":name, "Tags":uid, "Priority":"3", "Content-Type":mime||"audio/webm", "X-Filename":"voice-"+dur+".webm" }, body:blob});
+    await fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":encTitle(name), "Tags":uid, "Priority":"3", "Content-Type":mime||"audio/webm", "X-Filename":"voice-"+dur+".webm" }, body:blob});
     updateMsgStatus(topic, id, "delivered");
     const subs=lsGet("fc_subs_"+topic, []); for(const s of subs){ if(window.FC_PUSH) FC_PUSH.sendPush(s, {title:name, body:"[语音]"}).catch(()=>{}); }
   }catch(e){ updateMsgStatus(topic, id, "failed"); toast("发送失败，点击重发"); }
@@ -1178,15 +1183,15 @@ function retrySend(topic, id){
   updateMsgStatus(topic, id, "sending");
   if(m.type==="image" && m.img && m.img.indexOf("data:")===0){
     const bin=dataURLToBytes(m.img);
-    if(bin){ fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":myName||"我", "Tags":uid, "Priority":"3", "Content-Type":"image/jpeg", "X-Filename":"sticker.jpg" }, body:bin})
+    if(bin){ fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":encTitle(myName||"我"), "Tags":uid, "Priority":"3", "Content-Type":"image/jpeg", "X-Filename":"sticker.jpg" }, body:bin})
       .then(()=>updateMsgStatus(topic, id, "delivered")).catch(()=>updateMsgStatus(topic, id, "failed")); return; }
   }
   if(m.type==="voice" && m.voice && m.voice.indexOf("data:")===0){
     const blob=dataURLToBlob(m.voice);
-    if(blob){ fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":myName||"我", "Tags":uid, "Priority":"3", "Content-Type":(blob.type||"audio/webm"), "X-Filename":"voice-"+(m.dur||0)+".webm" }, body:blob})
+    if(blob){ fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":encTitle(myName||"我"), "Tags":uid, "Priority":"3", "Content-Type":(blob.type||"audio/webm"), "X-Filename":"voice-"+(m.dur||0)+".webm" }, body:blob})
       .then(()=>updateMsgStatus(topic, id, "delivered")).catch(()=>updateMsgStatus(topic, id, "failed")); return; }
   }
-  fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":myName||"我", "Tags":uid, "Priority":"3" }, body:m.text})
+  fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":encTitle(myName||"我"), "Tags":uid, "Priority":"3" }, body:m.text})
     .then(()=>updateMsgStatus(topic, id, "delivered"))
     .catch(()=>updateMsgStatus(topic, id, "failed"));
 }
@@ -1660,7 +1665,7 @@ function sendMerge(topic, items){
   const id="local-"+Date.now()+"-"+Math.random().toString(36).slice(2,6);
   const body="\u0001M"+JSON.stringify(items)+"\u0001";
   addLocalMsg(topic, {id, sender:uid, name:myName||"我", text:"", merge:items, time:Date.now()/1000, self:true, status:"sending"}, {silentUnread:true});
-  fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":myName||"我", "Tags":uid, "Priority":"3" }, body:body})
+  fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":encTitle(myName||"我"), "Tags":uid, "Priority":"3" }, body:body})
     .then(()=>updateMsgStatus(topic, id, "delivered"))
     .catch(()=>updateMsgStatus(topic, id, "failed"));
 }
@@ -1796,7 +1801,7 @@ function sendTyping(){
   const now=Date.now();
   if(now-lastTyping < 2500) return;
   lastTyping=now;
-  try{ fetch(BASE+"/"+activeTopic, {method:"POST", headers:{ "Title":myName||"我", "Tags":uid+",typing", "Priority":"min" }, body:"1"}); }catch(e){}
+  try{ fetch(BASE+"/"+activeTopic, {method:"POST", headers:{ "Title":encTitle(myName||"我"), "Tags":uid+",typing", "Priority":"min" }, body:"1"}); }catch(e){}
 }
 
 // @ 提醒选择器
