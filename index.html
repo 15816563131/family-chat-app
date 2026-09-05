@@ -126,6 +126,18 @@
   .emoji-panel.show{display:flex}
   .emoji-panel span{font-size:24px;width:38px;height:38px;display:flex;align-items:center;justify-content:center;cursor:pointer;border-radius:6px}
   .emoji-panel span:active{background:var(--wx-active)}
+  /* 表情面板分页 + 我的表情 */
+  .emoji-tabs{display:flex;gap:6px;width:100%;margin-bottom:6px}
+  .emoji-tab{padding:3px 12px;border-radius:14px;font-size:13px;background:rgba(0,0,0,.06);color:#555;cursor:pointer}
+  .emoji-tab.active{background:var(--wx-green);color:#fff}
+  .emoji-grid{display:flex;flex-wrap:wrap;gap:4px;width:100%}
+  .emoji-sticker{width:46px;height:46px;border-radius:8px;object-fit:cover;cursor:pointer;border:1px solid rgba(0,0,0,.06)}
+  .emoji-sticker-add{width:46px;height:46px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:24px;color:#888;cursor:pointer;border:1px dashed #bbb}
+  /* 图片/表情消息气泡 */
+  .bubble.img{padding:4px;line-height:0}
+  .bubble.img::before{display:none}
+  .bubble.img img{display:block;max-width:160px;max-height:180px;border-radius:8px}
+  .bubble.img .img-expired{font-size:12px;color:#999;padding:8px;line-height:1.4}
   /* 通讯录分组标题 */
   .group-title{padding:8px 14px;font-size:12px;color:#9a9a9a;background:var(--wx-bg)}
   /* 我 */
@@ -455,6 +467,7 @@ body::after{width:40vw;height:40vw;right:-6vw;top:8vw;background:radial-gradient
     <div class="emoji-panel" id="emojiPanel"></div>
     <div class="sel-bar" id="selBar"><span id="selCount">已选 0 条</span><div class="sel-acts"><span id="selFwd">转发</span><span id="selFav">收藏</span><span id="selDel">删除</span><span id="selCancel">取消</span></div></div>
     <form class="composer" id="form">
+      <div class="ic" id="imgBtn" title="发送图片">🖼</div>
       <div class="ic" id="emojiBtn">😊</div>
       <textarea id="text" rows="1" placeholder="发送消息…" disabled></textarea>
       <button type="submit" class="send" id="sendBtn" disabled>发送</button>
@@ -546,6 +559,8 @@ body::after{width:40vw;height:40vw;right:-6vw;top:8vw;background:radial-gradient
 
   <div class="toast" id="toast"></div>
   <input type="file" id="backupFile" accept=".json,application/json" style="display:none">
+  <input type="file" id="stickerFile" accept="image/*" style="display:none">
+  <input type="file" id="imgFile" accept="image/*" style="display:none">
 </div>
 
 <script>
@@ -897,6 +912,13 @@ function handleIncoming(topic, m, fromHistory){
   if(recallTag){ recallMessage(topic, recallTag.slice("recall_".length)); return; }
   // 打字指示器（仅实时消息，历史回放忽略）
   if(tags.includes("typing") && !fromHistory){ showTyping(topic, m.title||"对方"); return; }
+  // 图片/表情（ntfy 附件）
+  if(m.attachment && m.attachment.url){
+    addLocalMsg(topic, {id:m.id, sender, name:m.title||"对方", text:"", img:m.attachment.url, w:0, h:0, time:(m.time||Date.now()/1000), self:false, type:"image"}, {silentUnread:false});
+    tryUpgradeAttachment(topic, m.id, m.attachment.url);
+    if(!fromHistory) playNewMsgCue(topic);
+    return;
+  }
   const parsed = parseQuote(m.message||"");
   const pm = parseMerge(parsed.text);
   if(pm.ok){ addLocalMsg(topic, {id:m.id, sender, name:m.title||"对方", text:"", merge:pm.items, time:(m.time||Date.now()/1000), self:false, mentioned:false}, {silentUnread:false}); if(!fromHistory) playNewMsgCue(topic); return; }
@@ -956,7 +978,7 @@ function addLocalMsg(topic, msg, opts){
 
   const chat=getChat(topic);
   if(chat){
-    chat.lastMsg = (msg.type==="pat") ? msg.text : (msg.merge ? ((msg.self?"":msg.name+": ")+"[聊天记录]") : ((msg.self?"":msg.name+": ")+msg.text));
+    chat.lastMsg = (msg.type==="pat") ? msg.text : (msg.type==="image") ? ((msg.self?"":msg.name+": ")+"[图片]") : (msg.merge ? ((msg.self?"":msg.name+": ")+"[聊天记录]") : ((msg.self?"":msg.name+": ")+msg.text));
     chat.lastTime = msg.time;
     const visibleNow = (topic===activeTopic && !document.hidden);
     if(!opts.silentUnread && !visibleNow) chat.unread=(chat.unread||0)+1;
@@ -997,9 +1019,29 @@ function updateMsgStatus(topic, id, status){
   if(!m) return; m.status=status; setMsgs(topic, msgs);
   if(topic===activeTopic) renderChatFull(topic);
 }
+function dataURLToBytes(d){
+  try{ const i=d.indexOf(","); const b64=d.slice(i+1); const bin=atob(b64); const arr=new Uint8Array(bin.length); for(let j=0;j<bin.length;j++) arr[j]=bin.charCodeAt(j); return arr.buffer; }catch(e){ return null; }
+}
+async function sendImageMsg(topic, dataURL, w, h){
+  if(!dataURL) return;
+  const name=myName||"我";
+  const id="local-"+Date.now()+"-"+Math.random().toString(36).slice(2,6);
+  addLocalMsg(topic, {id, sender:uid, name, img:dataURL, w:w||0, h:h||0, time:Date.now()/1000, self:true, type:"image", status:"sending"}, {silentUnread:true});
+  try{
+    const bin=dataURLToBytes(dataURL); if(!bin) throw new Error("encode");
+    await fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":name, "Tags":uid, "Priority":"3", "Content-Type":"image/jpeg", "X-Filename":"sticker.jpg" }, body:bin});
+    updateMsgStatus(topic, id, "delivered");
+    const subs=lsGet("fc_subs_"+topic, []); for(const s of subs){ if(window.FC_PUSH) FC_PUSH.sendPush(s, {title:name, body:"[图片]"}).catch(()=>{}); }
+  }catch(e){ updateMsgStatus(topic, id, "failed"); toast("发送失败，点击重发"); }
+}
 function retrySend(topic, id){
   const msgs=getMsgs(topic); const m=msgs.find(x=>x.id===id); if(!m) return;
   updateMsgStatus(topic, id, "sending");
+  if(m.type==="image" && m.img && m.img.indexOf("data:")===0){
+    const bin=dataURLToBytes(m.img);
+    if(bin){ fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":myName||"我", "Tags":uid, "Priority":"3", "Content-Type":"image/jpeg", "X-Filename":"sticker.jpg" }, body:bin})
+      .then(()=>updateMsgStatus(topic, id, "delivered")).catch(()=>updateMsgStatus(topic, id, "failed")); return; }
+  }
   fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":myName||"我", "Tags":uid, "Priority":"3" }, body:m.text})
     .then(()=>updateMsgStatus(topic, id, "delivered"))
     .catch(()=>updateMsgStatus(topic, id, "failed"));
@@ -1141,6 +1183,7 @@ function renderChatFull(topic){
 }
 function bubbleEl(m){
   if(m.type==="pat"||m.type==="sysrec"){ return patLineEl(m.text); }
+  if(m.type==="image"){ return imageBubble(m); }
   if(m.merge){ return mergeBubble(m); }
   const row=document.createElement("div"); row.className="row "+(m.self?"me":"other"); row.dataset.id=m.id;
   if(selectMode && selected.has(m.id)) row.classList.add("selected");
@@ -1202,6 +1245,31 @@ function showMergeDetail(items){
   items.forEach(it=>{ html+='<div class="fav-item"><div><b>'+escapeHtml(it.name||"")+'</b>：'+escapeHtml(it.text||"")+'</div></div>'; });
   html+='</div><div class="cactions"><button id="dClose">关闭</button></div>';
   dialogCard(html); $("dClose").onclick=closeDialog;
+}
+function imageBubble(m){
+  const row=document.createElement("div"); row.className="row "+(m.self?"me":"other"); row.dataset.id=m.id;
+  if(selectMode && selected.has(m.id)) row.classList.add("selected");
+  const c=activeTopic?getChat(activeTopic):null;
+  const av=document.createElement("div"); av.className="av";
+  av.style.background = m.self? "#07C160" : (c?c.color:colorFrom(m.sender||m.name));
+  av.textContent = avatarText(m.self?(myName||"我"):(m.name||"对方"));
+  const b=document.createElement("div"); b.className="bubble img";
+  const im=document.createElement("img"); im.src=m.img||""; b.appendChild(im);
+  im.onerror=()=>{ const d=document.createElement("div"); d.className="img-expired"; d.textContent="图片已过期或不可见"; if(im.parentNode) im.parentNode.replaceChild(d, im); };
+  row.appendChild(av); row.appendChild(b);
+  if(m.self){
+    const st=document.createElement("div"); st.className="st"+(m.status==="failed"?" fail":"")+(m.read?" read":"");
+    let label=""; if(m.status==="sending") label="⏳"; else if(m.status==="failed") label="⚠ 重发"; else if(m.read) label="已读"; else if(m.status==="delivered") label="已送达";
+    st.textContent=label; if(m.status==="failed") st.onclick=()=>retrySend(activeTopic, m.id); row.appendChild(st);
+  }
+  attachLongPress(row, ()=>showMsgMenu(m));
+  return row;
+}
+// 收到附件图片后，尽量抓回本地 dataURL 以便长期可见（ntfy 附件会过期）
+function tryUpgradeAttachment(topic, id, url){
+  try{
+    fetch(url).then(r=>{ if(!r.ok) throw 0; return r.blob(); }).then(b=>{ const rd=new FileReader(); rd.onload=()=>{ const url2=rd.result; const msgs=getMsgs(topic); const x=msgs.find(z=>z.id===id); if(x){ x.img=url2; setMsgs(topic, msgs); if(topic===activeTopic) renderChatFull(topic); } }; rd.readAsDataURL(b); }).catch(()=>{});
+  }catch(e){}
 }
 
 // 高亮 @名字（@自己 用红色）
@@ -1663,17 +1731,82 @@ function addRecentEmoji(e){
   let r=lsGet("fc_recent_emoji",[]);
   r=r.filter(x=>x!==e); r.unshift(e); r=r.slice(0,16); lsSet("fc_recent_emoji",r);
 }
+let _emojiTab="emoji";
 function buildEmoji(){
-  const p=$("emojiPanel"); p.innerHTML="";
-  const recent=lsGet("fc_recent_emoji",[]);
-  if(recent.length){
-    const rc=document.createElement("div"); rc.className="emoji-recent";
-    recent.forEach(e=>{ const s=document.createElement("span"); s.textContent=e; s.onclick=()=>{ const ta=$("text"); ta.value+=e; ta.focus(); autoGrow(ta); }; rc.appendChild(s); });
-    p.appendChild(rc);
+  const p=$("emojiPanel"); if(!p) return; p.innerHTML="";
+  const tabs=document.createElement("div"); tabs.className="emoji-tabs";
+  const t1=document.createElement("div"); t1.className="emoji-tab"+(_emojiTab==="emoji"?" active":""); t1.textContent="表情"; t1.onclick=()=>{ _emojiTab="emoji"; buildEmoji(); };
+  const t2=document.createElement("div"); t2.className="emoji-tab"+(_emojiTab==="stickers"?" active":""); t2.textContent="我的"; t2.onclick=()=>{ _emojiTab="stickers"; buildEmoji(); };
+  tabs.appendChild(t1); tabs.appendChild(t2); p.appendChild(tabs);
+  const grid=document.createElement("div"); grid.className="emoji-grid"; p.appendChild(grid);
+  if(_emojiTab==="emoji"){
+    const recent=lsGet("fc_recent_emoji",[]);
+    if(recent.length){ recent.forEach(e=>{ const s=document.createElement("span"); s.textContent=e; s.onclick=()=>{ const ta=$("text"); ta.value+=e; ta.focus(); autoGrow(ta); }; grid.appendChild(s); }); }
+    EMOJIS.forEach(e=>{ const s=document.createElement("span"); s.textContent=e; s.onclick=()=>{ const ta=$("text"); ta.value+=e; ta.focus(); autoGrow(ta); addRecentEmoji(e); }; grid.appendChild(s); });
+  } else {
+    const st=lsGet("fc_stickers",[]);
+    if(st.length){ st.forEach(sk=>{ const img=document.createElement("img"); img.className="emoji-sticker"; img.src=sk.data; img.title=sk.name||"表情"; img.onclick=()=>sendSticker(sk); grid.appendChild(img); }); }
+    const add=document.createElement("div"); add.className="emoji-sticker-add"; add.textContent="＋"; add.onclick=()=>$("stickerFile").click(); grid.appendChild(add);
+    if(!st.length){ const tip=document.createElement("div"); tip.style.cssText="width:100%;font-size:12px;color:#999;padding:6px 2px"; tip.textContent="点 ＋ 把图片加为表情"; grid.appendChild(tip); }
   }
-  EMOJIS.forEach(e=>{ const s=document.createElement("span"); s.textContent=e; s.onclick=()=>{ const ta=$("text"); ta.value+=e; ta.focus(); autoGrow(ta); addRecentEmoji(e); }; p.appendChild(s); });
+}
+function hideEmoji(){ const p=$("emojiPanel"); if(p) p.classList.remove("show"); }
+function sendSticker(sk){
+  if(!activeTopic){ toast("请先进入一个聊天"); return; }
+  hideEmoji();
+  sendImageMsg(activeTopic, sk.data, sk.w||0, sk.h||0);
+}
+function addStickerFile(file){
+  if(!file) return;
+  const reader=new FileReader();
+  reader.onload=()=>{
+    const img=new Image();
+    img.onload=()=>{
+      const max=200; let w=img.width, h=img.height;
+      if(!w||!h){ toast("图片无法读取"); return; }
+      if(w>h && w>max){ h=Math.round(h*max/w); w=max; } else if(h>max){ w=Math.round(w*max/h); h=max; }
+      const cv=document.createElement("canvas"); cv.width=w; cv.height=h;
+      cv.getContext("2d").drawImage(img,0,0,w,h);
+      let out=cv.toDataURL("image/jpeg",0.82);
+      if(out.length>120000) out=cv.toDataURL("image/jpeg",0.6);
+      const st=lsGet("fc_stickers",[]);
+      st.push({id:"sk-"+Date.now()+"-"+Math.random().toString(36).slice(2,6), data:out, name:"表情", w, h});
+      lsSet("fc_stickers", st);
+      _emojiTab="stickers"; buildEmoji();
+      toast("已添加表情");
+    };
+    img.onerror=()=>toast("图片无法读取");
+    img.src=reader.result;
+  };
+  reader.onerror=()=>toast("读取失败");
+  reader.readAsDataURL(file);
 }
 $("emojiBtn").onclick=()=>{ const p=$("emojiPanel"); buildEmoji(); p.classList.toggle("show"); if(p.classList.contains("show")) $("text").blur(); };
+$("stickerFile").onchange=(e)=>{ const f=e.target.files&&e.target.files[0]; addStickerFile(f); e.target.value=""; };
+$("imgBtn").onclick=()=>{ $("imgFile").click(); };
+$("imgFile").onchange=(e)=>{
+  const f=e.target.files&&e.target.files[0];
+  if(!f){ return; }
+  if(!activeTopic){ toast("请先进入一个聊天"); e.target.value=""; return; }
+  const r=new FileReader();
+  r.onload=()=>{
+    const img=new Image();
+    img.onload=()=>{
+      const max=800; let w=img.width, h=img.height;
+      if(w>h && w>max){ h=Math.round(h*max/w); w=max; } else if(h>max){ w=Math.round(w*max/h); h=max; }
+      const cv=document.createElement("canvas"); cv.width=w; cv.height=h;
+      cv.getContext("2d").drawImage(img,0,0,w,h);
+      let out=cv.toDataURL("image/jpeg",0.8);
+      if(out.length>600000) out=cv.toDataURL("image/jpeg",0.6);
+      sendImageMsg(activeTopic, out, w, h);
+    };
+    img.onerror=()=>toast("图片无法读取");
+    img.src=r.result;
+  };
+  r.onerror=()=>toast("读取失败");
+  r.readAsDataURL(f);
+  e.target.value="";
+};
 
 // 聊天详情右上角菜单
 $("chatMore").onclick=()=>{
@@ -1841,7 +1974,7 @@ function gatherAllData(){
   return {
     accounts:lsGet("fc_accounts",[]), session:lsGet("fc_session",null),
     chats:lsGet("fc_chats",[]), msgs, favs:lsGet("fc_favs",[]),
-    settings:{ fc_name:k("fc_name"), fc_uid:k("fc_uid"), fc_dark:k("fc_dark"), fc_font:k("fc_font"), fc_bg:k("fc_bg"), fc_recent_emoji:lsGet("fc_recent_emoji",[]) }
+    settings:{ fc_name:k("fc_name"), fc_uid:k("fc_uid"), fc_dark:k("fc_dark"), fc_font:k("fc_font"), fc_bg:k("fc_bg"), fc_recent_emoji:JSON.stringify(lsGet("fc_recent_emoji",[])), fc_stickers:JSON.stringify(lsGet("fc_stickers",[])) }
   };
 }
 function downloadFile(name, text){
