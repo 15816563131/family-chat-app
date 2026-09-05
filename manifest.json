@@ -5,5 +5,9 @@
   "display": "standalone",
   "background_color": "#ededed",
   "theme_color": "#07C160",
-  "description": "免服务器家庭聊天，微信风格多会话，后台也能收消息"
+  "description": "免服务器家庭聊天，微信风格多会话，后台也能收消息",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
 }
