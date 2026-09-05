@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>家庭聊天 · 免服务器版</title>
+<link rel="manifest" href="manifest.json">
+<style>
+  :root{ --bg:#f5f7fb; --panel:#ffffff; --line:#e3e7ee; --text:#1c2530; --muted:#6b7280; --brand:#185FA5; --green:#0F6E56; }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);height:100vh;display:flex;flex-direction:column}
+  header{padding:12px 16px;background:var(--panel);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  header h1{font-size:16px;font-weight:600}
+  .status{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px}
+  .dot{width:8px;height:8px;border-radius:50%;background:#cbd5e1}
+  .dot.ok{background:var(--green)} .dot.bad{background:#d33}
+  .room{margin-left:auto;font-size:12px;color:var(--muted)} .room b{color:var(--brand)}
+  button{font-family:inherit;cursor:pointer;border:none;border-radius:8px;padding:6px 12px;font-size:13px}
+  .btn{background:var(--brand);color:#fff} .btn.ghost{background:#eef2f7;color:var(--text)}
+  #log{flex:1;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:10px}
+  .msg{max-width:78%;padding:9px 12px;border-radius:12px;line-height:1.5;word-break:break-word}
+  .msg.me{align-self:flex-end;background:var(--brand);color:#fff;border-bottom-right-radius:3px}
+  .msg.other{align-self:flex-start;background:#eef2f7;color:var(--text);border-bottom-left-radius:3px}
+  .msg .who{font-size:11px;opacity:.7;margin-bottom:2px}
+  .msg .t{font-size:10px;opacity:.6;margin-top:4px;text-align:right}
+  .composer{padding:12px 16px;background:var(--panel);border-top:1px solid var(--line);display:flex;gap:8px}
+  .composer input{flex:1;padding:10px 14px;border:1px solid var(--line);border-radius:20px;font-size:14px;outline:none}
+  .composer input:focus{border-color:var(--brand)}
+  .empty{color:var(--muted);text-align:center;margin:auto;max-width:420px;line-height:1.7}
+</style>
+</head>
+<body>
+<header>
+  <h1>家庭聊天</h1>
+  <span class="status"><span id="dot" class="dot"></span><span id="statusText">未连接</span></span>
+  <span class="room">房间：<b id="roomLabel">—</b></span>
+  <button class="btn ghost" id="copyBtn">复制房间号</button>
+</header>
+
+<div id="log">
+  <div class="empty" id="empty">
+    把「房间号」发给家人即可一起聊天。<br>
+    消息经免费公共服务中转，无需任何自有服务器，<br>
+    后台/关闭也能收到系统通知。
+  </div>
+</div>
+
+<form class="composer" id="form">
+  <input id="text" placeholder="输入消息，回车发送…" autocomplete="off" disabled>
+  <button class="btn" id="sendBtn" disabled>发送</button>
+</form>
+
+<script src="push.js"></script>
+<script>
+const BASE = "https://ntfy.sh";
+const $ = (id)=>document.getElementById(id);
+
+let uid = localStorage.getItem("fc_uid");
+if(!uid){ uid = "u" + Math.random().toString(36).slice(2,10); localStorage.setItem("fc_uid", uid); }
+let name = localStorage.getItem("fc_name") || "";
+let topic = localStorage.getItem("fc_topic") || "";
+const subs = {}; // endpoint -> subscription
+
+if(!name || !topic){
+  name = prompt("你的昵称？", "家人") || "家人";
+  localStorage.setItem("fc_name", name);
+  topic = prompt("房间号（自定义一段难猜的字符串，家人用同一个）：", Math.random().toString(36).slice(2,12)) || "family";
+  localStorage.setItem("fc_topic", topic);
+}
+$("roomLabel").textContent = topic;
+
+// 在 App 内运行时，把房间与 uid 告知原生层，用于后台轮询 ntfy 推送
+if (typeof AndroidBridge !== "undefined") {
+  try { AndroidBridge.setRoom(topic); AndroidBridge.setUid(uid); } catch (e) {}
+}
+
+let lastTs = parseInt(localStorage.getItem("fc_last_"+topic) || "0", 10);
+let es = null;
+
+function fmtTime(ts){ return new Date(ts*1000).toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"}); }
+function escapeHtml(s){ return (s||"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+
+function addMessage(m){
+  if(m.sender === uid) return;
+  const empty = $("empty"); if(empty) empty.remove();
+  const div = document.createElement("div");
+  div.className = "msg other";
+  div.innerHTML = '<div class="who">'+ (m.name||"家人") +'</div>'+ escapeHtml(m.text||"") +'<div class="t">'+fmtTime(m.time||Date.now()/1000)+'</div>';
+  $("log").appendChild(div);
+  $("log").scrollTop = $("log").scrollHeight;
+  notify(m.name||"家人", m.text||"");
+}
+
+function notify(title, body){
+  if(!("Notification" in window)) return;
+  if(Notification.permission === "granted"){ new Notification(title,{body:body, tag:"fc"}); }
+  else if(Notification.permission !== "denied"){ Notification.requestPermission().then(p=>{ if(p==="granted") new Notification(title,{body:body}); }); }
+}
+
+function handleMessage(m){
+  if(!m || m.event !== "message") return;
+  const tags = m.tags || [];
+  // 收集他人订阅信息（用于后台推送）
+  if(tags.includes("sub")) {
+    try{ const s = JSON.parse(m.message); if(s && s.endpoint) subs[s.endpoint] = s; }catch(e){}
+    return;
+  }
+  if(tags[0] === uid) return; // 跳过自己发的
+  addMessage({sender: tags[0]||"", name:m.title||"家人", text:m.message||"", time:m.time});
+  lastTs = Math.max(lastTs, m.time||0);
+  localStorage.setItem("fc_last_"+topic, String(lastTs));
+}
+
+async function loadHistory(){
+  try{
+    const r = await fetch(BASE+"/"+topic+"/json?since="+(lastTs||1));
+    const arr = await r.json();
+    (arr||[]).forEach(handleMessage);
+  }catch(e){}
+}
+
+function connect(){
+  if(es) es.close();
+  es = new EventSource(BASE+"/"+topic+"/sse");
+  es.onopen = ()=> setStatus(true);
+  es.onerror = ()=> { setStatus(false); setTimeout(connect, 3000); };
+  es.onmessage = (e)=>{ try{ handleMessage(JSON.parse(e.data)); }catch(_){} };
+}
+
+function setStatus(ok){ $("dot").className="dot "+(ok?"ok":"bad"); $("statusText").textContent = ok?"已连接":"重连中…"; }
+
+async function shareSubscription(){
+  if(!window.FC_PUSH) return;
+  try{
+    const sub = await FC_PUSH.subscribePush();
+    if(sub){ subs[sub.endpoint] = sub; await fetch(BASE+"/"+topic, {method:"POST", headers:{"Title":"sub","Tags":"sub"+uid,"Priority":"min"}, body: JSON.stringify(sub)}); }
+  }catch(e){ console.warn("订阅失败", e); }
+}
+
+async function sendMessage(text){
+  if(!text.trim()) return;
+  try{
+    await fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title": name, "Tags": uid, "Priority":"3" }, body: text});
+    const empty = $("empty"); if(empty) empty.remove();
+    const div = document.createElement("div");
+    div.className = "msg me";
+    div.innerHTML = '<div class="who">我 ('+name+')</div>'+escapeHtml(text)+'<div class="t">'+fmtTime(Math.floor(Date.now()/1000))+'</div>';
+    $("log").appendChild(div); $("log").scrollTop = $("log").scrollHeight;
+    // 给在线的其他订阅者直接发 Web Push（页面关闭也能收）
+    for(const ep in subs){
+      if(ep === (subs[ep].endpoint)) { /* 不排除 */ }
+      FC_PUSH && FC_PUSH.sendPush(subs[ep], {title:name, body:text}).catch(()=>{});
+    }
+  }catch(e){ alert("发送失败，请检查网络"); }
+}
+
+$("form").addEventListener("submit", (e)=>{ e.preventDefault(); const v=$("text").value; $("text").value=""; sendMessage(v); });
+$("copyBtn").addEventListener("click", ()=>{ navigator.clipboard.writeText(topic); $("copyBtn").textContent="已复制!"; setTimeout(()=>$("copyBtn").textContent="房间", 1000); });
+
+if("Notification" in window && Notification.permission === "default") Notification.requestPermission();
+if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
+
+$("text").disabled=false; $("sendBtn").disabled=false;
+loadHistory();
+connect();
+setTimeout(shareSubscription, 1500);
+setInterval(shareSubscription, 60000);
+</script>
+</body>
+</html>

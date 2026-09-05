@@ -1,0 +1,9 @@
+{
+  "name": "家庭聊天 · 免服务器版",
+  "short_name": "家聊",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#f5f7fb",
+  "theme_color": "#185FA5",
+  "description": "基于 ntfy 公共中继的免服务器家庭聊天，后台也能收消息"
+}
