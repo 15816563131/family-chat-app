@@ -89,7 +89,7 @@
   .tab svg{width:24px;height:24px}
   .tab .tab-badge{position:absolute;top:4px;right:calc(50% - 20px);min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:var(--wx-red);color:#fff;font-size:10px;display:flex;align-items:center;justify-content:center}
   /* 聊天页 */
-  #chatScreen{background:var(--wx-bg)}
+  #chatScreen{background:var(--wx-bg);position:relative}
   .messages{flex:1;overflow:auto;padding:10px 10px 4px;-webkit-overflow-scrolling:touch}
   .divider{text-align:center;margin:12px 0;font-size:12px;color:#9a9a9a}
   .row{display:flex;margin:10px 4px;align-items:flex-start}
@@ -234,6 +234,21 @@
   #chatScreen.bg-blue, #messages.bg-blue{background:#e7f0fb}
   #chatScreen.bg-paper, #messages.bg-paper{background:#f3ecd9}
   #chatScreen.bg-dark, #messages.bg-dark{background:#1a1a1a}
+  /* 多选转发 */
+  .row.selected .bubble{outline:2px solid var(--wx-green);outline-offset:1px}
+  #chatScreen.selecting .composer, #chatScreen.selecting .emoji-panel, #chatScreen.selecting .quote-bar{display:none}
+  .sel-bar{display:none;position:absolute;left:0;right:0;bottom:0;background:var(--wx-bar);border-top:1px solid var(--wx-bar-line);padding:10px 14px;align-items:center;justify-content:space-between;z-index:14;flex:0 0 auto;padding-bottom:calc(10px + var(--safe-b))}
+  .sel-bar.show{display:flex}
+  .sel-bar .sel-acts{display:flex;gap:18px;font-size:15px;color:var(--wx-green)}
+  .sel-bar .sel-acts span{cursor:pointer}
+  /* 合并转发卡片 */
+  .bubble.merge{background:var(--wx-other);max-width:74%;cursor:pointer}
+  .merge-title{font-size:14px;font-weight:600;margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid rgba(0,0,0,.06)}
+  .merge-item{font-size:13px;color:#333;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;margin:3px 0}
+  [data-theme="dark"] .merge-item{color:#ddd}
+  .merge-item .mi-name{color:var(--wx-blue)}
+  .merge-more{font-size:13px;color:#999}
+  .merge-foot{font-size:12px;color:#999;margin-top:6px;padding-top:6px;border-top:1px solid rgba(0,0,0,.06)}
 </style>
 </head>
 <body>
@@ -273,6 +288,7 @@
     <div class="at-pop" id="atPop"></div>
     <div class="quote-bar" id="quoteBar"><div class="qb-text" id="qbText"></div><div class="qb-close" id="qbClose">✕</div></div>
     <div class="emoji-panel" id="emojiPanel"></div>
+    <div class="sel-bar" id="selBar"><span id="selCount">已选 0 条</span><div class="sel-acts"><span id="selFwd">转发</span><span id="selFav">收藏</span><span id="selDel">删除</span><span id="selCancel">取消</span></div></div>
     <form class="composer" id="form">
       <div class="ic" id="emojiBtn">😊</div>
       <textarea id="text" rows="1" placeholder="发送消息…" disabled></textarea>
@@ -489,21 +505,30 @@ function handleIncoming(topic, m, fromHistory){
   // 打字指示器（仅实时消息，历史回放忽略）
   if(tags.includes("typing") && !fromHistory){ showTyping(topic, m.title||"对方"); return; }
   const parsed = parseQuote(m.message||"");
+  const pm = parseMerge(parsed.text);
+  if(pm.ok){ addLocalMsg(topic, {id:m.id, sender, name:m.title||"对方", text:"", merge:pm.items, time:(m.time||Date.now()/1000), self:false, mentioned:false}, {silentUnread:false}); return; }
   const mentioned = !!myName && myName.length>0 && parsed.text.indexOf("@"+myName) >= 0;
   addLocalMsg(topic, {id:m.id, sender, name:m.title||"对方", text:parsed.text, quote:parsed.quote, time:(m.time||Date.now()/1000), self:false, mentioned}, {silentUnread:false});
 }
 
-// 撤回：从本地存储移除该条消息，并刷新视图
+// 撤回：用灰色系统提示「X 撤回了一条消息」替换原消息（微信式），而非直接删除
 function recallMessage(topic, msgId){
   const msgs = getMsgs(topic);
-  const idx = msgs.findIndex(x=>x.id===msgId);
-  if(idx<0) return;
-  msgs.splice(idx,1);
-  setMsgs(topic, msgs);
   const chat=getChat(topic);
+  const idx = msgs.findIndex(x=>x.id===msgId);
+  if(idx<0){
+    // 本地无此消息（如离线时发来又撤回）：末尾补一条系统提示
+    if(chat){ const line={id:"rec-"+msgId, sender:"", name:"", text:"对方撤回了一条消息", type:"sysrec", time:Date.now()/1000, self:false}; msgs.push(line); setMsgs(topic, msgs); if(topic===activeTopic){ appendBubble(line); scrollBottom(); } renderChats(); }
+    return;
+  }
+  const m = msgs[idx];
+  const who = m.self ? "你" : (m.name||"对方");
+  const line = {id:m.id, sender:"", name:"", text: who+" 撤回了一条消息", type:"sysrec", time:m.time, self:false};
+  msgs[idx] = line;
+  setMsgs(topic, msgs);
   if(chat){
     const last = msgs[msgs.length-1];
-    chat.lastMsg = last ? (last.self?"":last.name+": ")+last.text : "";
+    chat.lastMsg = last ? (last.type==="sysrec" ? last.text : ((last.self?"":last.name+": ")+last.text)) : "";
     chat.lastTime = last ? last.time : 0;
     saveChats();
   }
@@ -537,7 +562,7 @@ function addLocalMsg(topic, msg, opts){
 
   const chat=getChat(topic);
   if(chat){
-    chat.lastMsg = (msg.type==="pat") ? msg.text : ((msg.self?"":msg.name+": ")+msg.text);
+    chat.lastMsg = (msg.type==="pat") ? msg.text : (msg.merge ? ((msg.self?"":msg.name+": ")+"[聊天记录]") : ((msg.self?"":msg.name+": ")+msg.text));
     chat.lastTime = msg.time;
     const visibleNow = (topic===activeTopic && !document.hidden);
     if(!opts.silentUnread && !visibleNow) chat.unread=(chat.unread||0)+1;
@@ -566,7 +591,7 @@ async function sendMessage(topic, text, quote){
   addLocalMsg(topic, {id, sender:uid, name, text, quote:quote||null, time:Date.now()/1000, self:true, status:"sending"}, {silentUnread:true});
   try{
     await fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":name, "Tags":uid, "Priority":"3" }, body:body});
-    updateMsgStatus(topic, id, "sent");
+    updateMsgStatus(topic, id, "delivered");
     // 给在线订阅者推 Web Push（页面关闭也能收）
     const subs = lsGet("fc_subs_"+topic, []);
     for(const s of subs){ if(window.FC_PUSH) FC_PUSH.sendPush(s, {title:name, body:text}).catch(()=>{}); }
@@ -582,7 +607,7 @@ function retrySend(topic, id){
   const msgs=getMsgs(topic); const m=msgs.find(x=>x.id===id); if(!m) return;
   updateMsgStatus(topic, id, "sending");
   fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":myName||"我", "Tags":uid, "Priority":"3" }, body:m.text})
-    .then(()=>updateMsgStatus(topic, id, "sent"))
+    .then(()=>updateMsgStatus(topic, id, "delivered"))
     .catch(()=>updateMsgStatus(topic, id, "failed"));
 }
 
@@ -689,8 +714,10 @@ function renderChatFull(topic){
   scrollBottom();
 }
 function bubbleEl(m){
-  if(m.type==="pat"){ return patLineEl(m.text); }
+  if(m.type==="pat"||m.type==="sysrec"){ return patLineEl(m.text); }
+  if(m.merge){ return mergeBubble(m); }
   const row=document.createElement("div"); row.className="row "+(m.self?"me":"other"); row.dataset.id=m.id;
+  if(selectMode && selected.has(m.id)) row.classList.add("selected");
   const c=activeTopic?getChat(activeTopic):null;
   const av=document.createElement("div"); av.className="av";
   av.style.background = m.self? "#07C160" : (c?c.color:colorFrom(m.sender||m.name));
@@ -698,7 +725,7 @@ function bubbleEl(m){
   const b=document.createElement("div"); b.className="bubble";
   if(m.quote){ const q=document.createElement("div"); q.className="quote";
     q.innerHTML='<div class="qn">'+escapeHtml(m.quote.name||"")+'</div><div class="qt">'+highlightAt(escapeHtml(m.quote.text||""))+'</div>';
-    if(m.quote.i){ q.dataset.qid=m.quote.i; q.onclick=()=>{ const el=document.querySelector('#messages .row[data-id="'+m.quote.i+'"]'); if(el) el.scrollIntoView({block:"center"}); else toast("原消息已不可见"); }; }
+    if(m.quote.i){ q.dataset.qid=m.quote.i; q.onclick=()=>{ if(selectMode) return; const el=document.querySelector('#messages .row[data-id="'+m.quote.i+'"]'); if(el) el.scrollIntoView({block:"center"}); else toast("原消息已不可见"); }; }
     b.appendChild(q); }
   const isBig = !m.quote && isBigEmoji(m.text||"");
   if(isBig) b.classList.add("big-emoji");
@@ -708,8 +735,11 @@ function bubbleEl(m){
   // 自己消息的发送状态（发送中/失败重发）
   if(m.self){
     const st=document.createElement("div"); st.className="st"+(m.status==="failed"?" fail":"")+(m.read?" read":"");
-    let label = m.status==="sending"?"⏳" : (m.status==="failed"?"⚠ 重发":"");
-    if(m.status!=="failed" && m.read) label="已读";
+    let label = "";
+    if(m.status==="sending") label="⏳";
+    else if(m.status==="failed") label="⚠ 重发";
+    else if(m.read) label="已读";
+    else if(m.status==="delivered") label="已送达";
     st.textContent = label;
     if(m.status==="failed") st.onclick=()=>retrySend(activeTopic, m.id);
     row.appendChild(st);
@@ -721,6 +751,31 @@ function patLineEl(text){
   const d=document.createElement("div"); d.className="row sys";
   const s=document.createElement("div"); s.className="sys-line"; s.textContent=text;
   d.appendChild(s); return d;
+}
+function mergeBubble(m){
+  const row=document.createElement("div"); row.className="row "+(m.self?"me":"other"); row.dataset.id=m.id;
+  if(selectMode && selected.has(m.id)) row.classList.add("selected");
+  const c=activeTopic?getChat(activeTopic):null;
+  const av=document.createElement("div"); av.className="av";
+  av.style.background = m.self? "#07C160" : (c?c.color:colorFrom(m.sender||m.name));
+  av.textContent = avatarText(m.self?(myName||"我"):(m.name||"对方"));
+  const b=document.createElement("div"); b.className="bubble merge";
+  const items=m.merge||[];
+  let html='<div class="merge-title">聊天记录</div>';
+  items.slice(0,3).forEach(it=>{ html+='<div class="merge-item"><span class="mi-name">'+escapeHtml(it.name||"")+'：</span>'+highlightAt(escapeHtml(it.text||""))+'</div>'; });
+  if(items.length>3) html+='<div class="merge-more">···</div>';
+  html+='<div class="merge-foot">共 '+items.length+' 条聊天记录</div>';
+  b.innerHTML=html;
+  b.onclick=()=>{ if(selectMode) return; showMergeDetail(items); };
+  row.appendChild(av); row.appendChild(b);
+  attachLongPress(row, ()=>showMsgMenu(m));
+  return row;
+}
+function showMergeDetail(items){
+  let html='<div class="ct">聊天记录（'+items.length+' 条）</div><div class="fav-list">';
+  items.forEach(it=>{ html+='<div class="fav-item"><div><b>'+escapeHtml(it.name||"")+'</b>：'+escapeHtml(it.text||"")+'</div></div>'; });
+  html+='</div><div class="cactions"><button id="dClose">关闭</button></div>';
+  dialogCard(html); $("dClose").onclick=closeDialog;
 }
 
 // 高亮 @名字（@自己 用红色）
@@ -743,6 +798,14 @@ function parseQuote(body){
 function embedQuote(body, quote){
   if(!quote) return body;
   return "\u0001Q"+JSON.stringify({i:quote.id||"", n:quote.name||"", t:quote.text||""})+"\u0001"+body;
+}
+// 合并转发：\u0001M<json>\u0001 包裹消息数组
+function parseMerge(body){
+  if(body && body.length>3 && body.charCodeAt(0)===1 && body.charAt(1)==="M"){
+    const end=body.indexOf("\u0001",2);
+    if(end>2){ try{ return {ok:true, items:JSON.parse(body.slice(2,end))}; }catch(e){} }
+  }
+  return {ok:false};
 }
 
 // 长按（触摸/鼠标）触发回调
@@ -769,6 +832,7 @@ function showMsgMenu(m){
   if(m.text) opts.push({label:"转发", fn:()=>forwardMessage(m)});
   if(m.text) opts.push({label:"收藏", fn:()=>addFav(m)});
   opts.push({label:"拍一拍", fn:()=>doPat(m.self?(myName||"我"):(m.name||"对方"))});
+  opts.push({label:"多选", fn:()=>enterSelect(m)});
   const curPin = activeTopic?getChat(activeTopic).pinned:null;
   if(m.text && (!curPin || curPin.id!==m.id)) opts.push({label:"置顶", fn:()=>pinMessage(m)});
   else if(curPin && curPin.id===m.id) opts.push({label:"取消置顶", fn:()=>unpinMessage()});
@@ -791,6 +855,38 @@ $("qbClose").onclick=hideQuoteBar;
 $("jumpLatest").onclick=()=>{ scrollBottom(); if(newCount>0) sendRead(activeTopic); };
 $("pinText").onclick=()=>{ const c=getChat(activeTopic); if(c&&c.pinned){ const el=document.querySelector('#messages .row[data-id="'+c.pinned.id+'"]'); if(el) el.scrollIntoView({block:"center"}); } };
 $("pinClose").onclick=()=>unpinMessage();
+$("selCancel").onclick=exitSelect;
+$("selFwd").onclick=()=>{
+  if(selected.size===0){ toast("请先选择消息"); return; }
+  const msgs=getMsgs(activeTopic);
+  const real=msgs.filter(x=>selected.has(x.id)).sort((a,b)=>a.time-b.time)
+    .filter(x=>!x.type || (x.type!=="sysrec"&&x.type!=="pat"&&x.type!=="merge"))
+    .map(x=>({name:x.self?(myName||"我"):(x.name||"对方"), text:x.text||""}));
+  if(real.length===0){ toast("所选无可转发内容"); return; }
+  const targets=chats.filter(c=>c.topic!==activeTopic);
+  if(targets.length===0){ toast("没有其他会话可转发"); return; }
+  openSheet(targets.map(c=>({label:c.name, fn:()=>{ sendMerge(c.topic, real); toast("已转发到「"+c.name+"」"); exitSelect(); }})));
+};
+$("selFav").onclick=()=>{
+  const msgs=getMsgs(activeTopic);
+  let n=0; msgs.filter(x=>selected.has(x.id)).forEach(x=>{ if(x.text && (!x.type||(x.type!=="sysrec"&&x.type!=="pat"&&x.type!=="merge"))){ addFav({text:x.text, name:x.self?(myName||"我"):(x.name||"对方")}); n++; } });
+  toast(n?("已收藏 "+n+" 条"):"无可收藏内容"); exitSelect();
+};
+$("selDel").onclick=()=>{
+  const ids=[...selected];
+  let msgs=getMsgs(activeTopic); msgs=msgs.filter(x=>!ids.includes(x.id)); setMsgs(activeTopic, msgs);
+  const c=getChat(activeTopic);
+  if(c){ const last=msgs[msgs.length-1]; c.lastMsg=last?(last.type==="sysrec"?last.text:((last.self?"":last.name+": ")+last.text)):""; c.lastTime=last?last.time:0; saveChats(); }
+  toast("已删除"); exitSelect();
+};
+$("messages").addEventListener("click",(e)=>{
+  if(!selectMode) return;
+  const row=e.target.closest(".row"); if(!row||!row.dataset.id) return;
+  const id=row.dataset.id;
+  if(selected.has(id)) selected.delete(id); else selected.add(id);
+  row.classList.toggle("selected", selected.has(id));
+  updateSelBar();
+});
 
 // 转发到其他会话
 function forwardMessage(m){
@@ -881,6 +977,20 @@ function broadcastPin(pin){
   const body = pin ? JSON.stringify(pin) : "";
   try{ fetch(BASE+"/"+activeTopic, {method:"POST", headers:{ "Title":"pin", "Tags": uid+",pin_"+activeTopic, "Priority":"min" }, body:body}); }catch(e){}
 }
+
+// ---------- 多选合并转发 ----------
+function sendMerge(topic, items){
+  const id="local-"+Date.now()+"-"+Math.random().toString(36).slice(2,6);
+  const body="\u0001M"+JSON.stringify(items)+"\u0001";
+  addLocalMsg(topic, {id, sender:uid, name:myName||"我", text:"", merge:items, time:Date.now()/1000, self:true, status:"sending"}, {silentUnread:true});
+  fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":myName||"我", "Tags":uid, "Priority":"3" }, body:body})
+    .then(()=>updateMsgStatus(topic, id, "delivered"))
+    .catch(()=>updateMsgStatus(topic, id, "failed"));
+}
+function updateSelBar(){ const el=$("selCount"); if(el) el.textContent="已选 "+selected.size+" 条"; }
+function renderSelectUI(){ const bar=$("selBar"); if(selectMode){ $("chatScreen").classList.add("selecting"); bar.classList.add("show"); updateSelBar(); } }
+function exitSelect(){ selectMode=false; selected.clear(); const bar=$("selBar"); if(bar) bar.classList.remove("show"); const cs=$("chatScreen"); if(cs) cs.classList.remove("selecting"); if(activeTopic) renderChatFull(activeTopic); }
+function enterSelect(m){ selectMode=true; selected.clear(); if(m&&m.id) selected.add(m.id); renderSelectUI(); if(activeTopic) renderChatFull(activeTopic); }
 function appendBubble(m){
   const box=$("messages");
   const msgs=getMsgs(activeTopic);
@@ -890,6 +1000,7 @@ function appendBubble(m){
   box.appendChild(bubbleEl(m));
 }
 let atBottom=true, newCount=0, newMsgFrom=0, showNewDivider=false;
+let selectMode=false; const selected=new Set();
 function scrollBottom(){ const b=$("messages"); b.scrollTop=b.scrollHeight; }
 function isAtBottom(){ const b=$("messages"); return b.scrollHeight - b.scrollTop - b.clientHeight < 40; }
 function updateJumpBadge(){ const b=$("jumpNew"); if(!b) return; if(newCount>0){ b.style.display="flex"; b.textContent=newCount>99?"99+":newCount; } else b.style.display="none"; }
