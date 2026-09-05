@@ -472,6 +472,26 @@ body::after{width:40vw;height:40vw;right:-6vw;top:8vw;background:radial-gradient
 [data-theme="dark"] .card,[data-theme="dark"] .sheet,[data-theme="dark"] .menu,[data-theme="dark"] .me-top,[data-theme="dark"] .emoji-panel,[data-theme="dark"] .at-pop,[data-theme="dark"] .sel-bar,[data-theme="dark"] .quote-bar,[data-theme="dark"] .pin-bar{background:rgba(30,36,54,.72);border-color:rgba(255,255,255,.14)}
 [data-theme="dark"] .composer textarea,[data-theme="dark"] .card input,[data-theme="dark"] .searchbar input{background:rgba(255,255,255,.08);color:#eee;border-color:rgba(255,255,255,.12)}
 [data-theme="dark"] #splash{background:rgba(15,20,35,.5)}
+/* 消息表情回应 reactions */
+.bcol{display:flex;flex-direction:column;min-width:0;max-width:78%;}
+.row.me .bcol{align-items:flex-end;}
+.row.other .bcol{align-items:flex-start;}
+.reactions{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px;justify-content:flex-start;}
+.row.me .reactions{justify-content:flex-end;}
+.chip{display:inline-flex;align-items:center;gap:2px;background:rgba(255,255,255,.7);border:1px solid rgba(0,0,0,.06);border-radius:14px;padding:2px 8px;font-size:12px;color:#333;cursor:pointer;backdrop-filter:blur(4px);}
+.chip.me{background:rgba(7,193,96,.16);border-color:rgba(7,193,96,.4);color:#07a050;}
+.row.me .chip{background:rgba(255,255,255,.55);}
+.row.me .chip.me{background:rgba(7,193,96,.22);border-color:rgba(7,193,96,.45);}
+.react-bar{position:fixed;left:50%;transform:translateX(-50%) translateY(10px);bottom:84px;display:none;align-items:center;gap:4px;background:rgba(255,255,255,.82);backdrop-filter:blur(14px);border:1px solid rgba(0,0,0,.08);border-radius:22px;padding:6px 8px;box-shadow:0 8px 30px rgba(0,0,0,.18);z-index:60;opacity:0;transition:opacity .15s,transform .15s;}
+.react-bar.show{display:flex;opacity:1;transform:translateX(-50%) translateY(0);}
+.rb-e{width:38px;height:38px;border:none;background:transparent;font-size:22px;line-height:1;cursor:pointer;border-radius:50%;transition:transform .1s,background .1s;}
+.rb-e:hover{background:rgba(0,0,0,.06);transform:scale(1.15);}
+.rb-e.on{background:rgba(7,193,96,.18);}
+.rb-x{width:30px;height:30px;border:none;background:rgba(0,0,0,.05);color:#666;border-radius:50%;font-size:14px;cursor:pointer;margin-left:2px;}
+[data-theme="dark"] .chip{background:rgba(255,255,255,.12);color:#e8e8e8;border-color:rgba(255,255,255,.1);}
+[data-theme="dark"] .react-bar{background:rgba(40,42,48,.85);border-color:rgba(255,255,255,.12);}
+[data-theme="dark"] .rb-e:hover{background:rgba(255,255,255,.12);}
+[data-theme="dark"] .rb-x{background:rgba(255,255,255,.12);color:#ccc;}
 </style>
 </head>
 <body>
@@ -1032,6 +1052,9 @@ function handleIncoming(topic, m, fromHistory){
   if(kickTag){ if(sender!==uid){ applyGroupKick(topic, m.message||"", false); } return; }
   const leaveTag = tags.find(t=>typeof t==="string" && t.indexOf("leave_")===0);
   if(leaveTag){ if(sender!==uid){ applyGroupLeave(topic, m.message||"", false); } return; }
+  // 表情回应同步（react_<topic>，body JSON {id,emoji,uid,on}）
+  const reactTag = tags.find(t=>typeof t==="string" && t.indexOf("react_")===0);
+  if(reactTag){ if(sender!==uid){ try{ const p=JSON.parse(m.message||"{}"); if(p&&p.id) applyReaction(topic, p.id, p.emoji, p.uid, !!p.on); }catch(e){} } return; }
   if(sender===uid) return; // 跳过自己（含撤回/打字回声）
   // 撤回控制消息：tags 含 recall_<id>
   const recallTag = tags.find(t=>typeof t==="string" && t.indexOf("recall_")===0);
@@ -1355,7 +1378,7 @@ function openChat(topic){
   activeTopic=topic;
   const hadUnread = c.unread>0;
   c.unread=0; c.atMe=false; saveChats(); renderChats(); updateTabBadge();
-  replyingTo=null; hideQuoteBar();
+  replyingTo=null; hideQuoteBar(); hideReactBar();
   newCount=0; updateJumpBadge(); const jb2=$("jumpLatest"); if(jb2) jb2.classList.remove("show"); atBottom=true;
   searchInChat=""; renderSearchBanner();
   $("chatTitle").textContent = (c.type==="group") ? (c.name+"（"+(c.members?c.members.length:1)+"）") : c.name;
@@ -1413,7 +1436,15 @@ function bubbleEl(m){
   const isBig = !m.quote && isBigEmoji(m.text||"");
   if(isBig) b.classList.add("big-emoji");
   const tx=document.createElement("div"); tx.innerHTML=highlightAt(escapeHtml(m.text||"")); b.appendChild(tx);
-  row.appendChild(av); row.appendChild(b);
+  const bcol=document.createElement("div"); bcol.className="bcol";
+  bcol.appendChild(b);
+  const rmap=msgReactions(m); const rkeys=Object.keys(rmap);
+  if(rkeys.length){
+    const rc=document.createElement("div"); rc.className="reactions";
+    rkeys.forEach(e=>{ const uids=rmap[e]||[]; const chip=document.createElement("div"); chip.className="chip"+(uids.indexOf(uid)>=0?" me":""); chip.textContent=e+(uids.length>1?(" "+uids.length):""); chip.onclick=(ev)=>{ ev.stopPropagation(); toggleReaction(activeTopic, m.id, e); }; rc.appendChild(chip); });
+    bcol.appendChild(rc);
+  }
+  row.appendChild(av); row.appendChild(bcol);
   av.addEventListener("dblclick",(e)=>{ e.preventDefault(); doPat(m.self?(myName||"我"):(m.name||"对方")); });
   // 自己消息的发送状态（发送中/失败重发）
   if(m.self){
@@ -1542,6 +1573,7 @@ function showMsgMenu(m){
   if(m.text) opts.push({label:"收藏", fn:()=>addFav(m)});
   if(m.text) opts.push({label:"提醒", fn:()=>scheduleReminder(m)});
   opts.push({label:"拍一拍", fn:()=>doPat(m.self?(myName||"我"):(m.name||"对方"))});
+  if(m.text) opts.push({label:"回应", fn:()=>showReactBar(m)});
   opts.push({label:"多选", fn:()=>enterSelect(m)});
   const curPin = activeTopic?getChat(activeTopic).pinned:null;
   if(m.text && (!curPin || curPin.id!==m.id)) opts.push({label:"置顶", fn:()=>pinMessage(m)});
@@ -1551,6 +1583,59 @@ function showMsgMenu(m){
   opts.push({label:"删除", danger:true, fn:()=>{ recallMessage(activeTopic, m.id); toast("已删除"); }});
   openSheet(opts);
 }
+// 消息表情回应（reactions）：长按消息「回应」→ 选 emoji；经 ntfy 控制消息 react_<topic> 广播同步
+const REACT_EMOJIS = ["👍","❤️","😂","🎉","😮","💔"];
+function msgReactions(m){ return (m && m.reactions && typeof m.reactions==="object") ? m.reactions : {}; }
+function toggleReaction(topic, id, emoji){
+  const msgs=getMsgs(topic); const m=msgs.find(x=>x.id===id); if(!m) return;
+  const map=msgReactions(m); const arr=(map[emoji]||[]).slice();
+  const i=arr.indexOf(uid); const on=(i<0);
+  if(on) arr.push(uid); else arr.splice(i,1);
+  if(arr.length) map[emoji]=arr; else delete map[emoji];
+  m.reactions=map; setMsgs(topic, msgs);
+  if(topic===activeTopic) refreshRow(id);
+  renderChats();
+  sendReact(topic, id, emoji, on);
+}
+function sendReact(topic, id, emoji, on){
+  try{ fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":"react", "Tags": uid+",react_"+topic, "Priority":"min" }, body: JSON.stringify({id, emoji, uid, on})}); }catch(e){}
+}
+function applyReaction(topic, id, emoji, ruid, on){
+  const msgs=getMsgs(topic); const m=msgs.find(x=>x.id===id); if(!m) return;
+  const map=msgReactions(m); const arr=(map[emoji]||[]).slice();
+  const i=arr.indexOf(ruid);
+  if(on){ if(i<0) arr.push(ruid); } else { if(i>=0) arr.splice(i,1); }
+  if(arr.length) map[emoji]=arr; else delete map[emoji];
+  m.reactions=map; setMsgs(topic, msgs);
+  if(topic===activeTopic) refreshRow(id);
+  renderChats();
+}
+function refreshRow(id){
+  const box=document.getElementById("messages"); if(!box) return;
+  const rows=box.querySelectorAll('.row[data-id]');
+  for(const row of rows){ if(row.dataset.id===id){ const msgs=getMsgs(activeTopic); const m=msgs.find(x=>x.id===id); if(m){ row.replaceWith(bubbleEl(m)); } break; } }
+}
+let reactTarget=null;
+function showReactBar(m){
+  reactTarget=m;
+  let bar=document.getElementById("reactBar");
+  if(!bar){
+    bar=document.createElement("div"); bar.id="reactBar"; bar.className="react-bar";
+    const cs=document.getElementById("chatScreen"); if(cs) cs.appendChild(bar); else document.body.appendChild(bar);
+  }
+  bar.innerHTML="";
+  REACT_EMOJIS.forEach(e=>{
+    const b=document.createElement("button"); b.type="button"; b.className="rb-e"; b.textContent=e;
+    const cur=msgReactions(m)[e]||[]; if(cur.indexOf(uid)>=0) b.classList.add("on");
+    b.onclick=(ev)=>{ ev.stopPropagation(); toggleReaction(activeTopic, m.id, e); hideReactBar(); };
+    bar.appendChild(b);
+  });
+  const x=document.createElement("button"); x.type="button"; x.className="rb-x"; x.textContent="✕";
+  x.onclick=(ev)=>{ ev.stopPropagation(); hideReactBar(); };
+  bar.appendChild(x);
+  bar.classList.add("show");
+}
+function hideReactBar(){ const bar=document.getElementById("reactBar"); if(bar) bar.classList.remove("show"); reactTarget=null; }
 // 消息定时提醒（纯本地：仅应用打开时触发；关闭后不会后台提醒）
 let reminders = lsGet("fc_reminders", []);
 function scheduleReminder(m){
