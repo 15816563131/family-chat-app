@@ -265,6 +265,149 @@
   .auth-forget{text-align:center;color:#999;font-size:12px;margin-top:10px;cursor:pointer}
   [data-theme="dark"] .auth-card{background:#1f1f1f}
   [data-theme="dark"] .auth-input{background:#2a2a2a;border-color:#3a3a3a;color:#eee}
+/* ===== 液态玻璃主题（覆盖层，与介绍站一致） ===== */
+:root{
+  --emerald:#10b981; --teal:#0ea5a4; --cyan:#22d3ee; --violet:#a78bfa;
+  --glass:rgba(255,255,255,.5); --glass-strong:rgba(255,255,255,.72);
+  --glass-border:rgba(255,255,255,.6);
+  --glass-shadow:0 8px 32px rgba(15,23,42,.12), inset 0 1px 0 rgba(255,255,255,.7);
+}
+@keyframes lgfloat{0%,100%{transform:translate(0,0) scale(1)}33%{transform:translate(4vw,3vw) scale(1.08)}66%{transform:translate(-3vw,2vw) scale(.96)}}
+body{
+  background:radial-gradient(120% 120% at 10% 0%,#d8f5ec 0%,#e6f3ff 45%,#f1e9ff 100%);
+  overflow:hidden;
+}
+body::before,body::after{
+  content:"";position:fixed;border-radius:50%;filter:blur(60px);opacity:.55;
+  mix-blend-mode:multiply;z-index:-2;pointer-events:none;animation:lgfloat 22s ease-in-out infinite;
+}
+body::before{width:46vw;height:46vw;left:-8vw;top:-10vw;background:radial-gradient(circle,#5eead4,transparent 70%)}
+body::after{width:40vw;height:40vw;right:-6vw;top:8vw;background:radial-gradient(circle,#a5b4fc,transparent 70%);animation-delay:-6s}
+
+/* 手机外壳变为悬浮玻璃面板 */
+#phone{
+  background:rgba(255,255,255,.42);
+  backdrop-filter:blur(30px) saturate(160%); -webkit-backdrop-filter:blur(30px) saturate(160%);
+  border:1px solid rgba(255,255,255,.6);
+  box-shadow:0 30px 70px rgba(15,23,42,.25), inset 0 1px 0 rgba(255,255,255,.7);
+  overflow:hidden;
+}
+#phone::before,#phone::after{
+  content:"";position:absolute;border-radius:50%;filter:blur(50px);opacity:.5;
+  z-index:0;pointer-events:none;animation:lgfloat 26s ease-in-out infinite;
+}
+#phone::before{width:60%;height:60%;left:-15%;top:-10%;background:radial-gradient(circle,#7dd3fc,transparent 70%)}
+#phone::after{width:55%;height:55%;right:-15%;bottom:-10%;background:radial-gradient(circle,#6ee7b7,transparent 70%);animation-delay:-10s}
+.screen,.header,.tabbar,.list,.composer,.dialog,.mask,.toast,#splash,.messages{position:relative;z-index:1}
+.screen{background:transparent}
+.list{background:transparent}
+#chatScreen{background:transparent}
+.messages{background:transparent}
+
+/* 顶/底栏玻璃 */
+.header{
+  background:var(--glass);
+  backdrop-filter:blur(18px) saturate(160%); -webkit-backdrop-filter:blur(18px) saturate(160%);
+  border-bottom:1px solid rgba(255,255,255,.5);
+}
+.tabbar{
+  background:var(--glass);
+  backdrop-filter:blur(18px) saturate(160%); -webkit-backdrop-filter:blur(18px) saturate(160%);
+  border-top:1px solid rgba(255,255,255,.5);
+}
+.searchbar{background:rgba(255,255,255,.4)}
+.searchbar input{background:rgba(255,255,255,.6);border:1px solid rgba(255,255,255,.5)}
+
+/* 会话项：悬浮玻璃卡片 */
+.item{
+  background:rgba(255,255,255,.45);
+  backdrop-filter:blur(10px) saturate(160%); -webkit-backdrop-filter:blur(10px) saturate(160%);
+  margin:8px 10px;border-radius:16px;box-shadow:0 2px 12px rgba(15,23,42,.07);
+}
+.item+.item::before{display:none}
+.item:active{background:rgba(255,255,255,.65)}
+
+/* 输入栏玻璃 */
+.composer{
+  background:var(--glass);
+  backdrop-filter:blur(18px) saturate(160%); -webkit-backdrop-filter:blur(18px) saturate(160%);
+  border-top:1px solid rgba(255,255,255,.5);
+}
+.composer textarea{background:rgba(255,255,255,.72);border:1px solid rgba(255,255,255,.5)}
+
+/* 气泡：液态玻璃 */
+.row.other .bubble{
+  background:rgba(255,255,255,.74);
+  backdrop-filter:blur(10px) saturate(160%); -webkit-backdrop-filter:blur(10px) saturate(160%);
+  border:1px solid rgba(255,255,255,.6);box-shadow:0 2px 10px rgba(15,23,42,.08);
+}
+.row.other .bubble::before{display:none}
+.row.me .bubble{
+  background:linear-gradient(135deg,#34d399,#22d3ee);color:#063b2f;
+  border:1px solid rgba(255,255,255,.55);box-shadow:0 2px 10px rgba(16,185,129,.3);
+}
+.row.me .bubble::before{display:none}
+.bubble.big-emoji{background:transparent!important;border:none!important;box-shadow:none}
+
+/* 弹层 / 对话框 / 菜单 玻璃 */
+.card{
+  background:rgba(255,255,255,.74);
+  backdrop-filter:blur(22px) saturate(160%); -webkit-backdrop-filter:blur(22px) saturate(160%);
+  border:1px solid rgba(255,255,255,.65);
+  box-shadow:0 20px 50px rgba(15,23,42,.25), inset 0 1px 0 rgba(255,255,255,.7);
+}
+.card input{background:rgba(255,255,255,.7);border:1px solid rgba(0,0,0,.1)}
+.sheet{
+  background:rgba(255,255,255,.74);
+  backdrop-filter:blur(22px) saturate(160%); -webkit-backdrop-filter:blur(22px) saturate(160%);
+  border:1px solid rgba(255,255,255,.6);box-shadow:0 -10px 40px rgba(15,23,42,.2);
+}
+.sheet .opt{background:transparent}
+.sheet .opt:active{background:rgba(255,255,255,.4)}
+.sheet .cancel{background:rgba(255,255,255,.5)}
+.menu{
+  background:rgba(255,255,255,.5);
+  backdrop-filter:blur(14px) saturate(160%); -webkit-backdrop-filter:blur(14px) saturate(160%);
+  border:1px solid rgba(255,255,255,.5);border-radius:16px;overflow:hidden;margin:10px;
+}
+.menu .mi{background:transparent}
+.menu .mi:active{background:rgba(255,255,255,.35)}
+.me-top{
+  background:rgba(255,255,255,.45);
+  backdrop-filter:blur(14px) saturate(160%); -webkit-backdrop-filter:blur(14px) saturate(160%);
+  border:1px solid rgba(255,255,255,.5);border-radius:16px;margin:10px;
+}
+.emoji-panel{background:rgba(255,255,255,.6);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-top:1px solid rgba(255,255,255,.5)}
+.at-pop{background:rgba(255,255,255,.8);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,.6)}
+.pin-bar{background:rgba(255,245,224,.8);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+.sel-bar{background:rgba(255,255,255,.7);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border-top:1px solid rgba(255,255,255,.5)}
+.quote-bar{background:rgba(255,255,255,.55);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+.jump-latest{background:rgba(255,255,255,.78);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.6)}
+
+/* 主色：翡翠/青 渐变 */
+.composer .send{background:linear-gradient(135deg,var(--emerald),var(--teal))}
+.composer .send:active{filter:brightness(.95)}
+.header .right.action{color:var(--teal)}
+.empty .btn{background:linear-gradient(135deg,var(--emerald),var(--teal))}
+.tab.active{color:var(--teal)}
+.fav-item .fa{color:var(--teal)}
+.auth-btn{background:linear-gradient(135deg,var(--emerald),var(--teal))}
+.auth-btn:active{filter:brightness(.95)}
+
+/* 启动屏玻璃 */
+#splash{background:rgba(255,255,255,.35);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px)}
+
+/* 深色模式：深色玻璃 */
+[data-theme="dark"] body{background:radial-gradient(120% 120% at 10% 0%,#0b1220 0%,#0d1b2a 45%,#1a1030 100%)}
+[data-theme="dark"] #phone{background:rgba(20,25,40,.5);border-color:rgba(255,255,255,.12)}
+[data-theme="dark"] .header,[data-theme="dark"] .tabbar,[data-theme="dark"] .composer,[data-theme="dark"] .searchbar{background:rgba(30,36,54,.5);border-color:rgba(255,255,255,.1)}
+[data-theme="dark"] .item{background:rgba(40,46,66,.55)}
+[data-theme="dark"] .item:active{background:rgba(50,56,78,.7)}
+[data-theme="dark"] .row.other .bubble{background:rgba(50,56,78,.72);border-color:rgba(255,255,255,.12);color:#e8e8e8}
+[data-theme="dark"] .row.me .bubble{background:linear-gradient(135deg,#0e7490,#155e75);color:#eafff7}
+[data-theme="dark"] .card,[data-theme="dark"] .sheet,[data-theme="dark"] .menu,[data-theme="dark"] .me-top,[data-theme="dark"] .emoji-panel,[data-theme="dark"] .at-pop,[data-theme="dark"] .sel-bar,[data-theme="dark"] .quote-bar,[data-theme="dark"] .pin-bar{background:rgba(30,36,54,.72);border-color:rgba(255,255,255,.14)}
+[data-theme="dark"] .composer textarea,[data-theme="dark"] .card input,[data-theme="dark"] .searchbar input{background:rgba(255,255,255,.08);color:#eee;border-color:rgba(255,255,255,.12)}
+[data-theme="dark"] #splash{background:rgba(15,20,35,.5)}
 </style>
 </head>
 <body>
@@ -338,6 +481,8 @@
         <div class="mi" id="favs"><span>我的收藏</span><span><span class="v" id="favV">0</span><span class="chev">›</span></span></div>
         <div class="mi" id="chatBg"><span>聊天背景</span><span><span class="v" id="bgV">默认</span><span class="chev">›</span></span></div>
         <div class="mi" id="clearAll"><span>清空所有聊天记录</span><span><span class="chev">›</span></span></div>
+        <div class="mi" id="backupExport"><span>聊天与账号备份</span><span><span class="chev">›</span></span></div>
+        <div class="mi" id="backupImport"><span>恢复备份</span><span><span class="chev">›</span></span></div>
         <div class="mi" id="about"><span>关于家聊</span><span><span class="chev">›</span></span></div>
       </div>
       <div class="menu" style="margin-top:10px">
@@ -345,6 +490,7 @@
         <div class="mi" id="myAccount"><span>我的账号</span><span><span class="v" id="acctV">-</span><span class="chev">›</span></span></div>
         <div class="mi" id="setPwd"><span>设置登录密码</span><span><span class="chev">›</span></span></div>
         <div class="mi" id="logoutBtn"><span>退出登录</span><span><span class="chev">›</span></span></div>
+        <div class="mi" id="acctMgr" style="display:none"><span>账号管理（调试）</span><span><span class="chev">›</span></span></div>
       </div>
     </div>
   </div>
@@ -394,6 +540,7 @@
   </div>
 
   <div class="toast" id="toast"></div>
+  <input type="file" id="backupFile" accept=".json,application/json" style="display:none">
 </div>
 
 <script>
@@ -1578,6 +1725,112 @@ $("auUser").onkeydown=(e)=>{ if(e.key==="Enter"){ (authMode==="register"?$("auNa
 $("myAccount").onclick=()=>{ const u=session?session.user:"-"; dialogCard(`<div class="ct">我的账号</div><div class="cb">当前家聊号：<b>${escapeHtml(u)}</b><br>昵称：${escapeHtml(myName||"")}<br><br>这是本机账号，无服务器、不上传任何数据。</div><div class="cactions"><button id="dOk">知道了</button></div>`); $("dOk").onclick=closeDialog; };
 $("setPwd").onclick=()=>{ promptDialog("设置登录密码","输入新的登录密码（至少 4 位）：","",(p)=>{ if(!p||p.length<4){ toast("密码至少 4 位"); return; } setMyPassword(p); },false,"password"); };
 $("logoutBtn").onclick=()=>confirmDialog("退出登录","退出后需要重新输入密码才能进入。确定退出？",()=>doLogout());
+
+// ---------- 备份/恢复（防清缓存丢失 + 跨设备账号） ----------
+let _dbgTap=0, _dbgTimer=null;
+$("about").addEventListener("click", ()=>{
+  _dbgTap++; clearTimeout(_dbgTimer);
+  _dbgTimer=setTimeout(()=>{ _dbgTap=0; }, 1500);
+  if(_dbgTap>=7){ _dbgTap=0; const m=$("acctMgr"); if(m){ m.style.display=""; toast("调试模式已开启：我页出现「账号管理」"); } }
+});
+function bytesToB64(bytes){ let s=""; for(let i=0;i<bytes.length;i++) s+=String.fromCharCode(bytes[i]); return btoa(s); }
+function b64ToBytes(b64){ const bin=atob(b64); const a=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) a[i]=bin.charCodeAt(i); return a; }
+const _SUBTLE = !!(window.crypto && crypto.subtle);
+async function deriveKey(pw, salt){
+  const enc=new TextEncoder();
+  const mat=await crypto.subtle.importKey("raw", enc.encode(pw), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey({name:"PBKDF2", salt, iterations:100000, hash:"SHA-256"}, mat, {name:"AES-GCM", length:256}, false, ["encrypt","decrypt"]);
+}
+async function encryptObj(obj, pw){
+  const salt=crypto.getRandomValues(new Uint8Array(16));
+  const key=await deriveKey(pw, salt);
+  const iv=crypto.getRandomValues(new Uint8Array(12));
+  const ct=await crypto.subtle.encrypt({name:"AES-GCM", iv}, key, new TextEncoder().encode(JSON.stringify(obj)));
+  return {app:"family-chat", v:1, enc:true, ts:Date.now(), salt:bytesToB64(salt), iv:bytesToB64(iv), ct:bytesToB64(new Uint8Array(ct))};
+}
+async function decryptObj(env, pw){
+  const salt=b64ToBytes(env.salt), iv=b64ToBytes(env.iv), ct=b64ToBytes(env.ct);
+  const key=await deriveKey(pw, salt);
+  const pt=await crypto.subtle.decrypt({name:"AES-GCM", iv}, key, ct);
+  return JSON.parse(new TextDecoder().decode(pt));
+}
+function gatherAllData(){
+  const msgs={}; (lsGet("fc_chats",[])||[]).forEach(c=>{ msgs[c.topic]=getMsgs(c.topic); });
+  const k=k=>localStorage.getItem(k);
+  return {
+    accounts:lsGet("fc_accounts",[]), session:lsGet("fc_session",null),
+    chats:lsGet("fc_chats",[]), msgs, favs:lsGet("fc_favs",[]),
+    settings:{ fc_name:k("fc_name"), fc_uid:k("fc_uid"), fc_dark:k("fc_dark"), fc_font:k("fc_font"), fc_bg:k("fc_bg"), fc_recent_emoji:lsGet("fc_recent_emoji",[]) }
+  };
+}
+function downloadFile(name, text){
+  try{
+    const blob=new Blob([text],{type:"application/json"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a"); a.href=url; a.download=name;
+    document.body.appendChild(a); a.click();
+    setTimeout(()=>{ try{document.body.removeChild(a);}catch(e){} try{URL.revokeObjectURL(url);}catch(e){} }, 1000);
+  }catch(e){}
+}
+$("backupExport").onclick=()=>{
+  if(!_SUBTLE){ toast("当前环境不支持加密，请用网页版操作备份"); return; }
+  promptDialog("导出备份","设置备份密码（恢复时需要，至少 4 位；留空则使用默认保护）：","",(pw)=>{
+    const p=(pw&&pw.length>=4)?pw:"family-chat-default-backup-key";
+    encryptObj(gatherAllData(), p).then(env=>{
+      const txt=JSON.stringify(env);
+      downloadFile("家聊备份_"+new Date().toISOString().slice(0,10)+".json", txt);
+      dialogCard(`<div class="ct">备份已生成</div><div class="cb">文件已尝试下载；若未自动保存，请复制下面的内容自行保存（粘贴成 .json 文件即可恢复）。</div><textarea id="bakTxt" readonly style="width:calc(100% - 36px);margin:8px 18px 0;height:120px;border:1px solid #ddd;border-radius:8px;padding:8px;font-size:11px">${escapeHtml(txt)}</textarea><div class="cactions"><button class="ghost" id="bakCopy">复制内容</button><button id="dOk">完成</button></div>`);
+      $("bakCopy").onclick=()=>copyText(txt,"已复制备份内容");
+      $("dOk").onclick=closeDialog;
+    }).catch(()=>toast("导出失败"));
+  }, false, "password");
+};
+$("backupImport").onclick=()=>{ $("backupFile").click(); };
+$("backupFile").onchange=(e)=>{
+  if(!_SUBTLE){ toast("当前环境不支持解密，请用网页版恢复备份"); return; }
+  const f=e.target.files&&e.target.files[0]; if(!f) return;
+  const r=new FileReader();
+  r.onload=()=>{
+    let env; try{ env=JSON.parse(r.result); }catch(err){ toast("文件无法解析"); return; }
+    const doRestore=(pw)=>{
+      decryptObj(env, pw||"family-chat-default-backup-key").then(d=>{
+        confirmDialog("恢复备份","将用备份覆盖本机当前所有聊天与账号数据，确定？",()=>{
+          lsSet("fc_accounts", d.accounts||[]);
+          lsSet("fc_session", d.session||null);
+          lsSet("fc_chats", d.chats||[]);
+          lsSet("fc_favs", d.favs||[]);
+          if(d.settings){ for(const key in d.settings){ const v=d.settings[key]; if(v===null||v===undefined) localStorage.removeItem(key); else localStorage.setItem(key, v); } }
+          if(d.msgs){ for(const t in d.msgs){ setMsgs(t, d.msgs[t]); } }
+          toast("恢复完成，正在重新加载…");
+          setTimeout(()=>location.reload(), 800);
+        });
+      }).catch(()=>toast("密码错误或文件损坏"));
+    };
+    if(env&&env.enc){ promptDialog("恢复备份","输入备份密码：","",(pw)=>doRestore(pw), false, "password"); }
+    else if(env&&!env.enc){ doRestore(""); }
+    else { toast("文件格式不正确"); }
+  };
+  r.readAsText(f);
+  e.target.value="";
+};
+// 调试：账号管理（删除未登录的本地账号）
+function openAccountManager(){
+  const cur = session&&session.user;
+  let html=`<div class="ct">账号管理（调试）</div><div class="cb">本机账号列表。可删除未登录的本地账号（仅本机，不影响他人设备）。</div>`;
+  if(!accounts.length) html+=`<div class="cb" style="margin-top:8px">暂无账号</div>`;
+  accounts.forEach((a,i)=>{
+    const active=a.user===cur;
+    html+=`<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid rgba(0,0,0,.08)">
+      <div><b>${escapeHtml(a.user)}</b> <span style="color:#888">${escapeHtml(a.name||"")}</span> ${active?'<span style="color:var(--teal)">· 当前登录</span>':'<span style="color:#999">· 未登录</span>'}</div>
+      ${active?'':'<button id="delAcc'+i+'" style="background:var(--wx-red);color:#fff;border:none;border-radius:6px;padding:6px 12px;cursor:pointer">删除</button>'}
+    </div>`;
+  });
+  html+=`<div class="cactions"><button id="dOk">关闭</button></div>`;
+  dialogCard(html);
+  $("dOk").onclick=closeDialog;
+  accounts.forEach((a,i)=>{ if(a.user!==cur){ const b=$("delAcc"+i); if(b) b.onclick=()=>{ confirmDialog("删除账号","删除「"+a.user+"」（仅本机），确定？",()=>{ accounts=accounts.filter(x=>x!==a); lsSet("fc_accounts",accounts); toast("已删除"); openAccountManager(); }); }; } });
+}
+$("acctMgr").onclick=()=>openAccountManager();
 
 // ---------- 通用弹窗 ----------
 function openSheet(opts){
