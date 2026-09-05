@@ -189,6 +189,20 @@
   .search-banner{display:none;align-items:center;justify-content:space-between;padding:7px 14px;background:#d9e6f7;color:#3a6ea5;font-size:13px;flex:0 0 auto}
   .search-banner.show{display:flex}
   .search-banner .clear{cursor:pointer;font-weight:600}
+  /* 引用回复条 + 气泡内引用块 + 收藏 */
+  .quote-bar{display:none;align-items:center;background:var(--wx-bar);border-top:1px solid var(--wx-bar-line);padding:8px 12px;flex:0 0 auto}
+  .quote-bar.show{display:flex}
+  .qb-text{flex:1;font-size:13px;color:var(--wx-muted);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  .qb-close{margin-left:10px;color:#888;font-size:16px;cursor:pointer;padding:0 4px}
+  .bubble .quote{background:rgba(0,0,0,.05);border-left:3px solid var(--wx-blue);border-radius:4px;padding:5px 8px;margin-bottom:6px;font-size:12px;color:var(--wx-muted);line-height:1.4}
+  .bubble .quote .qn{color:var(--wx-blue);margin-bottom:2px}
+  .bubble .quote .qt{white-space:pre-wrap;word-break:break-word}
+  .fav-list{max-height:60vh;overflow:auto}
+  .fav-item{padding:12px 16px;border-bottom:1px solid var(--wx-line);font-size:14px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
+  .fav-item .fa{margin-top:6px;display:flex;gap:14px;font-size:13px;color:var(--wx-green)}
+  .fav-item .fa span{cursor:pointer}
+  .emoji-recent{display:flex;flex-wrap:wrap;gap:4px;padding:6px 10px;border-bottom:1px solid var(--wx-line);background:var(--wx-panel)}
+  .emoji-recent span{font-size:20px;width:30px;height:30px;display:flex;align-items:center;justify-content:center;cursor:pointer}
 </style>
 </head>
 <body>
@@ -224,6 +238,7 @@
     <div class="search-banner" id="searchBanner"><span id="searchInfo">搜索</span><span class="clear" id="searchClear">清除</span></div>
     <div class="messages" id="messages"></div>
     <div class="at-pop" id="atPop"></div>
+    <div class="quote-bar" id="quoteBar"><div class="qb-text" id="qbText"></div><div class="qb-close" id="qbClose">✕</div></div>
     <div class="emoji-panel" id="emojiPanel"></div>
     <form class="composer" id="form">
       <div class="ic" id="emojiBtn">😊</div>
@@ -254,6 +269,7 @@
         <div class="mi" id="openNotif"><span>新消息通知</span><span><span class="v" id="notifV">开启</span><span class="chev">›</span></span></div>
         <div class="mi" id="darkMode"><span>深色模式</span><span><span class="v" id="darkV">跟随系统</span><span class="chev">›</span></span></div>
         <div class="mi" id="fontSize"><span>字体大小</span><span><span class="v" id="fontV">标准</span><span class="chev">›</span></span></div>
+        <div class="mi" id="favs"><span>我的收藏</span><span><span class="v" id="favV">0</span><span class="chev">›</span></span></div>
         <div class="mi" id="clearAll"><span>清空所有聊天记录</span><span><span class="chev">›</span></span></div>
         <div class="mi" id="about"><span>关于家聊</span><span><span class="chev">›</span></span></div>
       </div>
@@ -402,9 +418,9 @@ function handleIncoming(topic, m, fromHistory){
   if(recallTag){ recallMessage(topic, recallTag.slice("recall_".length)); return; }
   // 打字指示器（仅实时消息，历史回放忽略）
   if(tags.includes("typing") && !fromHistory){ showTyping(topic, m.title||"对方"); return; }
-  const text = m.message||"";
-  const mentioned = !!myName && myName.length>0 && text.indexOf("@"+myName) >= 0;
-  addLocalMsg(topic, {id:m.id, sender, name:m.title||"对方", text, time:(m.time||Date.now()/1000), self:false, mentioned}, {silentUnread:false});
+  const parsed = parseQuote(m.message||"");
+  const mentioned = !!myName && myName.length>0 && parsed.text.indexOf("@"+myName) >= 0;
+  addLocalMsg(topic, {id:m.id, sender, name:m.title||"对方", text:parsed.text, quote:parsed.quote, time:(m.time||Date.now()/1000), self:false, mentioned}, {silentUnread:false});
 }
 
 // 撤回：从本地存储移除该条消息，并刷新视图
@@ -468,13 +484,14 @@ function addLocalMsg(topic, msg, opts){
   }
 }
 
-async function sendMessage(topic, text){
+async function sendMessage(topic, text, quote){
   text=(text||"").trim(); if(!text) return;
   const name = myName || "我";
   const id = "local-"+Date.now()+"-"+Math.random().toString(36).slice(2,6);
-  addLocalMsg(topic, {id, sender:uid, name, text, time:Date.now()/1000, self:true, status:"sending"}, {silentUnread:true});
+  const body = embedQuote(text, quote);
+  addLocalMsg(topic, {id, sender:uid, name, text, quote:quote||null, time:Date.now()/1000, self:true, status:"sending"}, {silentUnread:true});
   try{
-    await fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":name, "Tags":uid, "Priority":"3" }, body:text});
+    await fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":name, "Tags":uid, "Priority":"3" }, body:body});
     updateMsgStatus(topic, id, "sent");
     // 给在线订阅者推 Web Push（页面关闭也能收）
     const subs = lsGet("fc_subs_"+topic, []);
@@ -563,6 +580,7 @@ function openChat(topic){
   const c=getChat(topic); if(!c) return;
   activeTopic=topic;
   c.unread=0; c.atMe=false; saveChats(); renderChats(); updateTabBadge();
+  replyingTo=null; hideQuoteBar();
   searchInChat=""; renderSearchBanner();
   $("chatTitle").textContent = c.name;
   renderChatFull(topic);
@@ -590,7 +608,11 @@ function bubbleEl(m){
   const av=document.createElement("div"); av.className="av";
   av.style.background = m.self? "#07C160" : (c?c.color:colorFrom(m.sender||m.name));
   av.textContent = avatarText(m.self?(myName||"我"):(m.name||"对方"));
-  const b=document.createElement("div"); b.className="bubble"; b.innerHTML=highlightAt(escapeHtml(m.text));
+  const b=document.createElement("div"); b.className="bubble";
+  if(m.quote){ const q=document.createElement("div"); q.className="quote";
+    q.innerHTML='<div class="qn">'+escapeHtml(m.quote.name||"")+'</div><div class="qt">'+highlightAt(escapeHtml(m.quote.text||""))+'</div>';
+    b.appendChild(q); }
+  const tx=document.createElement("div"); tx.innerHTML=highlightAt(escapeHtml(m.text||"")); b.appendChild(tx);
   row.appendChild(av); row.appendChild(b);
   // 自己消息的发送状态（发送中/失败重发）
   if(m.self){
@@ -612,6 +634,19 @@ function highlightAt(html){
   });
 }
 
+// 引用回复：用 \u0001Q<json>\u0001 包裹在消息体里，便于跨端还原
+function parseQuote(body){
+  if(body && body.length>3 && body.charCodeAt(0)===1 && body.charAt(1)==="Q"){
+    const end=body.indexOf("\u0001",2);
+    if(end>2){ try{ const q=JSON.parse(body.slice(2,end)); return {text:body.slice(end+1), quote:q}; }catch(e){} }
+  }
+  return {text:body, quote:null};
+}
+function embedQuote(body, quote){
+  if(!quote) return body;
+  return "\u0001Q"+JSON.stringify({n:quote.name||"", t:quote.text||""})+"\u0001"+body;
+}
+
 // 长按（触摸/鼠标）触发回调
 function attachLongPress(el, cb){
   let timer=null;
@@ -627,14 +662,65 @@ function attachLongPress(el, cb){
   el.addEventListener("mouseleave",cancel);
 }
 
-// 消息操作菜单：复制 / 撤回 / 删除
+// 消息操作菜单：复制 / 回复 / 转发 / 收藏 / 撤回 / 删除
+let replyingTo = null;
 function showMsgMenu(m){
   const opts=[];
   if(m.text) opts.push({label:"复制", fn:()=>{ copyText(m.text,"已复制"); }});
+  if(m.text) opts.push({label:"回复", fn:()=>doReply(m)});
+  if(m.text) opts.push({label:"转发", fn:()=>forwardMessage(m)});
+  if(m.text) opts.push({label:"收藏", fn:()=>addFav(m)});
   const canRecall = m.self && (Date.now()/1000 - (m.time||0)) < 120;
   if(canRecall) opts.push({label:"撤回", fn:()=>doRecall(m)});
   opts.push({label:"删除", danger:true, fn:()=>{ recallMessage(activeTopic, m.id); toast("已删除"); }});
   openSheet(opts);
+}
+
+// 引用回复
+function doReply(m){
+  replyingTo = {name:m.name||"对方", text:m.text||""};
+  const qb=$("quoteBar"), qt=$("qbText");
+  qt.textContent = (m.name||"对方") + "：" + (m.text||"");
+  qb.classList.add("show");
+  try{ $("text").focus(); }catch(e){}
+}
+function hideQuoteBar(){ replyingTo=null; const qb=$("quoteBar"); if(qb) qb.classList.remove("show"); }
+$("qbClose").onclick=hideQuoteBar;
+
+// 转发到其他会话
+function forwardMessage(m){
+  const targets = chats.filter(c=>c.topic!==activeTopic);
+  if(targets.length===0){ toast("没有其他会话可转发"); return; }
+  const opts = targets.map(c=>({label:c.name, fn:()=>{ sendMessage(c.topic, m.text||""); toast("已转发到「"+c.name+"」"); }}));
+  openSheet(opts);
+}
+
+// 收藏
+function addFav(m){
+  const favs = lsGet("fc_favs", []);
+  favs.unshift({text:m.text||"", from:(m.self?"我":(m.name||"对方")), time:Date.now()/1000});
+  lsSet("fc_favs", favs.slice(0,200));
+  const fv=$("favV"); if(fv) fv.textContent=favs.length;
+  toast("已收藏");
+}
+function openFavs(){
+  const favs = lsGet("fc_favs", []);
+  if(favs.length===0){ dialogCard('<div class="ct">我的收藏</div><div class="cb">还没有收藏的内容</div><div class="cactions"><button id="dOk">好的</button></div>'); $("dOk").onclick=closeDialog; return; }
+  let html='<div class="ct">我的收藏（'+favs.length+'）</div><div class="fav-list">';
+  favs.forEach((f,i)=>{
+    html += '<div class="fav-item"><div>'+escapeHtml(f.text||"")+'</div><div class="fa"><span data-i="'+i+'" class="fa-fwd">转发</span><span data-i="'+i+'" class="fa-del">删除</span></div></div>';
+  });
+  html+='</div><div class="cactions"><button id="dClose">关闭</button></div>';
+  dialogCard(html);
+  $("dClose").onclick=closeDialog;
+  document.querySelectorAll(".fa-fwd").forEach(el=>el.onclick=()=>{
+    const f=favs[+el.dataset.i]; const targets=chats;
+    const opts=targets.map(c=>({label:c.name, fn:()=>{ sendMessage(c.topic, f.text||""); toast("已转发到「"+c.name+"」"); closeDialog(); }}));
+    openSheet(opts);
+  });
+  document.querySelectorAll(".fa-del").forEach(el=>el.onclick=()=>{
+    const i=+el.dataset.i; favs.splice(i,1); lsSet("fc_favs",favs); const fv=$("favV"); if(fv) fv.textContent=favs.length; openFavs();
+  });
 }
 
 function doRecall(m){
@@ -674,6 +760,7 @@ function renderMe(){
   const nm = myName || "我";
   $("meName").textContent=nm; $("setNameV").textContent=nm;
   $("meAvatar").textContent=avatarText(nm); $("meAvatar").style.background=colorFrom(uid);
+  const fv=$("favV"); if(fv) fv.textContent=lsGet("fc_favs",[]).length;
 }
 
 // ---------- 通知 ----------
@@ -711,7 +798,7 @@ const form=$("form");
 form.addEventListener("submit",(e)=>{
   e.preventDefault();
   const ta=$("text"); const v=ta.value; ta.value=""; autoGrow(ta); hideAtPicker();
-  if(activeTopic) sendMessage(activeTopic, v);
+  if(activeTopic){ const q = replyingTo; replyingTo=null; hideQuoteBar(); sendMessage(activeTopic, v, q); }
 });
 $("text").addEventListener("input",(e)=>{ autoGrow(e.target); onComposerInput(e.target); });
 $("text").addEventListener("blur",()=>setTimeout(hideAtPicker,200));
@@ -793,14 +880,25 @@ $("fontSize").onclick=()=>{
     {label:(fontMode==="xl"?"✓ ":"")+"特大", fn:()=>{ fontMode="xl"; localStorage.setItem("fc_font","xl"); applyFont(); }},
   ]);
 };
+$("favs").onclick=openFavs;
 
 // 表情
-const EMOJIS="😀 😁 😂 🤣 😊 😍 😘 😎 🤔 😅 😭 😡 👍 👎 👌 🙏 💪 ❤️ 💔 🎉 🔥 ✨ 🌹 🍺 🍎 🐶 🐱 🌟 😴 🤝 💡 ⚽ 🎁 ☕ 🌈".split(" ");
+const EMOJIS="😀 😁 😂 🤣 😊 😍 😘 😎 🤔 😅 😭 😡 👍 👎 👌 🙏 💪 ❤️ 💔 🎉 🔥 ✨ 🌹 🍺 🍎 🐶 🐱 🌟 😴 🤝 💡 ⚽ 🎁 ☕ 🌈 😉 😢 😏 😜 🥰 😇 🤩 🥳 😤 🤯 🙄 😬 🤤 😋 😴 🤗 🤭 🫡 🤝 👏 🙌 👋 🤙 💯 ✅ 🆗 🈶 🈚 💢 💥 💫 ⭐ 🌟 💎 🔔 📣 📱 💬 📷 🎬 🎵 🍻 🍜 🍔 🍟 🌭 🍿 🍰 🍩 🍪 🍉 🍓 🍑 🥑 🌻 🌈 ☀️ 🌙 ⛅ ☁️ ❄️ 💧 🔥".split(" ");
+function addRecentEmoji(e){
+  let r=lsGet("fc_recent_emoji",[]);
+  r=r.filter(x=>x!==e); r.unshift(e); r=r.slice(0,16); lsSet("fc_recent_emoji",r);
+}
 function buildEmoji(){
   const p=$("emojiPanel"); p.innerHTML="";
-  EMOJIS.forEach(e=>{ const s=document.createElement("span"); s.textContent=e; s.onclick=()=>{ const ta=$("text"); ta.value+=e; ta.focus(); autoGrow(ta); }; p.appendChild(s); });
+  const recent=lsGet("fc_recent_emoji",[]);
+  if(recent.length){
+    const rc=document.createElement("div"); rc.className="emoji-recent";
+    recent.forEach(e=>{ const s=document.createElement("span"); s.textContent=e; s.onclick=()=>{ const ta=$("text"); ta.value+=e; ta.focus(); autoGrow(ta); }; rc.appendChild(s); });
+    p.appendChild(rc);
+  }
+  EMOJIS.forEach(e=>{ const s=document.createElement("span"); s.textContent=e; s.onclick=()=>{ const ta=$("text"); ta.value+=e; ta.focus(); autoGrow(ta); addRecentEmoji(e); }; p.appendChild(s); });
 }
-$("emojiBtn").onclick=()=>{ const p=$("emojiPanel"); p.classList.toggle("show"); if(p.classList.contains("show")) $("text").blur(); };
+$("emojiBtn").onclick=()=>{ const p=$("emojiPanel"); buildEmoji(); p.classList.toggle("show"); if(p.classList.contains("show")) $("text").blur(); };
 
 // 聊天详情右上角菜单
 $("chatMore").onclick=()=>{
