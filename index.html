@@ -492,6 +492,30 @@ body::after{width:40vw;height:40vw;right:-6vw;top:8vw;background:radial-gradient
 [data-theme="dark"] .react-bar{background:rgba(40,42,48,.85);border-color:rgba(255,255,255,.12);}
 [data-theme="dark"] .rb-e:hover{background:rgba(255,255,255,.12);}
 [data-theme="dark"] .rb-x{background:rgba(255,255,255,.12);color:#ccc;}
+/* 头像图片 + 在线小绿点 */
+.avatar img, .av img{width:100%;height:100%;object-fit:cover;display:block;border-radius:inherit}
+.avatar, .av{position:relative}
+.pdot{position:absolute;right:-2px;bottom:-2px;width:12px;height:12px;border-radius:50%;background:#07C160;border:2px solid var(--wx-card);box-shadow:0 0 0 1px rgba(0,0,0,.1)}
+.pdot.off{background:#bbb}
+[data-theme="dark"] .pdot{border-color:#11151f}
+/* 我的二维码 */
+.myqr-wrap{display:flex;flex-direction:column;align-items:center;gap:10px;padding:6px 0}
+.myqr-box{width:220px;height:220px;background:#fff;border-radius:12px;padding:10px;box-sizing:border-box}
+.myqr-box svg{width:100%;height:100%}
+.myqr-tip{font-size:13px;color:var(--wx-muted);text-align:center}
+.myqr-id{font-size:13px;color:var(--wx-muted)}
+/* 扫码层 */
+.scan-overlay{position:fixed;inset:0;background:#000;z-index:200;display:none;flex-direction:column}
+.scan-overlay.show{display:flex}
+.scan-video{width:100%;flex:1;object-fit:cover;background:#000}
+.scan-bar{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;color:#fff;font-size:15px}
+.scan-bar button{background:rgba(255,255,255,.15);color:#fff;border:none;padding:8px 16px;border-radius:20px;font-size:14px}
+.scan-hint{position:absolute;left:0;right:0;bottom:90px;text-align:center;color:rgba(255,255,255,.85);font-size:14px;padding:0 24px}
+.scan-reticle{position:absolute;left:50%;top:42%;transform:translate(-50%,-50%);width:64%;height:64%;border:2px solid rgba(7,193,96,.9);border-radius:14px;box-shadow:0 0 0 9999px rgba(0,0,0,.45)}
+.scan-reticle::after{content:"";position:absolute;left:0;right:0;top:50%;height:2px;background:rgba(7,193,96,.9);animation:scanMove 2s linear infinite}
+@keyframes scanMove{0%{top:8%}50%{top:92%}100%{top:8%}}
+/* 待同意标记 */
+.pending-badge{display:inline-block;font-size:11px;color:#fff;background:#f0a020;border-radius:8px;padding:1px 6px;margin-left:6px;vertical-align:middle}
 </style>
 </head>
 <body>
@@ -608,6 +632,14 @@ body::after{width:40vw;height:40vw;right:-6vw;top:8vw;background:radial-gradient
   <!-- 居中对话框 -->
   <div class="dialog" id="dialog">
     <div class="card" id="dialogCard"></div>
+  </div>
+
+  <!-- 扫码加好友层 -->
+  <div class="scan-overlay" id="scanOverlay">
+    <div class="scan-bar"><span>扫码添加好友</span><button id="scanCancel">取消</button></div>
+    <div class="scan-reticle"></div>
+    <video class="scan-video" id="scanVideo" playsinline></video>
+    <div class="scan-hint" id="scanHint">将对方的「我的二维码」放入框内</div>
   </div>
 
   <!-- 账号体系：登录 / 注册（无服务器，仅本机） -->
@@ -783,6 +815,57 @@ let uid = localStorage.getItem("fc_uid");
 if(!uid){ uid = "u"+Math.random().toString(36).slice(2,10); localStorage.setItem("fc_uid",uid); }
 let myName = localStorage.getItem("fc_name") || "";
 
+// ---------- 头像 / 在线状态 / 收件箱（免服务器，纯本地 + ntfy 控制消息，不轮询） ----------
+const MY_INBOX = "inbox_"+uid;             // 每个人的「收件箱」话题，仅用于接收好友请求/回执，不轮询、不耗电
+let myAvatar = localStorage.getItem("fc_avatar")||"";
+let peerAvatars = lsGet("fc_peer_avatars", {});   // uid -> dataURL
+let peerPresence = lsGet("fc_peer_presence", {}); // uid -> 最近一次"在线"时间戳(ms)，0 表示离线
+function savePeerAvatars(){ lsSet("fc_peer_avatars", peerAvatars); }
+function savePeerPresence(){ lsSet("fc_peer_presence", peerPresence); }
+const PRESENCE_TTL = 6*60*1000;           // 6 分钟内算"在线"
+function isOnline(u){ const t=peerPresence[u]; return !!t && (Date.now()-t)<PRESENCE_TTL; }
+
+// 把头像画进某个元素：有图用图，否则用首字 + 底色；可选在线小绿点
+function paintAvatar(el, name, uidv, self, color){
+  let img = self ? myAvatar : (uidv ? peerAvatars[uidv] : "");
+  if(img){
+    el.textContent=""; el.style.background="transparent";
+    if(!el.querySelector("img")||el.dataset.av!==img){ el.innerHTML='<img src="'+img+'" alt="">'; el.dataset.av=img; }
+  } else {
+    el.textContent=avatarText(name); el.style.background=color||colorFrom(uidv||name||"x");
+    el.dataset.av="";
+  }
+  // 在线点（仅对方、且在线时显示）
+  if(!self && uidv && isOnline(uidv)){
+    if(!el.querySelector(".pdot")){ const d=document.createElement("span"); d.className="pdot"; el.appendChild(d); }
+  } else {
+    const ex=el.querySelector(".pdot"); if(ex) ex.remove();
+  }
+}
+
+// 事件驱动在线状态：仅在前台/后台切换时各广播一次（无心跳、无定时，绝不耗电）
+let _lastFg = null;
+function fcSetForeground(fg){
+  if(fg===_lastFg) return; _lastFg=fg;
+  broadcastPresence(fg);
+}
+function broadcastPresence(on){
+  chats.forEach(c=>{
+    if(c.type==="group"){ (c.members||[]).forEach(m=>{ if(m.uid && m.uid!==uid) sendPresence(c.topic, m.uid, on); }); }
+    else if(c.peerUid && c.peerUid!==uid){ sendPresence(c.topic, c.peerUid, on); }
+  });
+}
+function sendPresence(topic, peerUid, on){
+  try{ fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":"pres", "Tags": uid+",pres_"+(on?"on":"off"), "Priority":"min" }, body: peerUid}); }catch(e){}
+}
+
+// 防止重名好友：同名则在后面加 (2) (3)…
+function uniqueName(name, type){
+  if(!chats.some(c=>c.type===type && c.name===name)) return name;
+  let i=2; while(chats.some(c=>c.type===type && c.name===name+" ("+i+")")) i++;
+  return name+" ("+i+")";
+}
+
 // ---------- 账号体系（无服务器，仅本机存储） ----------
 let accounts = lsGet("fc_accounts", []);
 let session = lsGet("fc_session", null);
@@ -879,7 +962,7 @@ if(chats===null){
   lsSet("fc_chats", chats);
 }
 function mkChat(name, topic){
-  return { name, topic, color: colorFrom(topic), type:"single", members:[], unread:0, lastMsg:"", lastTime:0, order:Date.now(), pinned:false, mute:false };
+  return { name, topic, color: colorFrom(topic), type:"single", members:[], unread:0, lastMsg:"", lastTime:0, order:Date.now(), pinned:false, mute:false, peerUid:"", online:false, pending:false };
 }
 function colorFrom(str){ let h=0; for(let i=0;i<str.length;i++) h=(h*31+str.charCodeAt(i))>>>0; return PAL[h%PAL.length]; }
 function saveChats(){ lsSet("fc_chats", chats); }
@@ -1056,6 +1139,19 @@ function handleIncoming(topic, m, fromHistory){
   // 表情回应同步（react_<topic>，body JSON {id,emoji,uid,on}）
   const reactTag = tags.find(t=>typeof t==="string" && t.indexOf("react_")===0);
   if(reactTag){ if(sender!==uid){ try{ const p=JSON.parse(m.message||"{}"); if(p&&p.id) applyReaction(topic, p.id, p.emoji, p.uid, !!p.on); }catch(e){} } return; }
+  // 头像更新（仅对方发来的才收，body 为 dataURL）
+  const avtTag = tags.find(t=>typeof t==="string" && t.indexOf("avt_")===0);
+  if(avtTag){ if(sender!==uid){ const url=(m.message||"").trim(); if(url && url.indexOf("data:image")===0){ peerAvatars[sender]=url; savePeerAvatars(); if(topic===activeTopic) renderChatFull(topic); renderChats(); } } return; }
+  // 在线状态（pres_on / pres_off，body 为对方 uid；此处 sender 即对方 uid）
+  const presTag = tags.find(t=>typeof t==="string" && t.indexOf("pres_")===0);
+  if(presTag){ if(sender!==uid){ const on = presTag.indexOf("pres_on")>=0; if(on) peerPresence[sender]=Date.now(); else peerPresence[sender]=0; savePeerPresence(); updatePresenceUI(sender); } return; }
+  // 好友请求 / 回执（走个人收件箱，topic 即本机收件箱）
+  const freqTag = tags.find(t=>typeof t==="string" && t.indexOf("friend_req_")===0);
+  if(freqTag){ if(sender!==uid){ try{ applyFriendReq(freqTag.slice("friend_req_".length), JSON.parse(m.message||"{}")); }catch(e){} } return; }
+  const fackTag = tags.find(t=>typeof t==="string" && t.indexOf("friend_ack_")===0);
+  if(fackTag){ if(sender!==uid){ applyFriendAck(fackTag.slice("friend_ack_".length)); } return; }
+  const frejTag = tags.find(t=>typeof t==="string" && t.indexOf("friend_rej_")===0);
+  if(frejTag){ if(sender!==uid){ applyFriendRej(frejTag.slice("friend_rej_".length)); } return; }
   if(sender===uid) return; // 跳过自己（含撤回/打字回声）
   // 撤回控制消息：tags 含 recall_<id>
   const recallTag = tags.find(t=>typeof t==="string" && t.indexOf("recall_")===0);
@@ -1294,9 +1390,12 @@ function renderChats(){
   }
   list.forEach(c=>{
     const it=document.createElement("div"); it.className="item";
-    const av=document.createElement("div"); av.className="avatar"; av.style.background=c.color; av.textContent=avatarText(c.name);
+    const av=document.createElement("div"); av.className="avatar";
+    paintAvatar(av, c.name, c.peerUid, false, c.color);
     const mid=document.createElement("div"); mid.className="mid";
-    const nm=document.createElement("div"); nm.className="name"; nm.textContent=c.name + (c.atMe?" ［有人@我］":"") + (c.mute?" 🔕":"") + (c.pinned?" 📌":"");
+    const nm=document.createElement("div"); nm.className="name";
+    nm.textContent=c.name + (c.atMe?" ［有人@我］":"") + (c.mute?" 🔕":"") + (c.pinned?" 📌":"");
+    if(c.pending){ const pb=document.createElement("span"); pb.className="pending-badge"; pb.textContent="待同意"; nm.appendChild(pb); }
     const pv=document.createElement("div"); pv.className="preview"; pv.textContent=c.lastMsg||"";
     mid.appendChild(nm); mid.appendChild(pv);
     const rc=document.createElement("div"); rc.className="rightcol";
@@ -1446,8 +1545,7 @@ function bubbleEl(m){
   if(selectMode && selected.has(m.id)) row.classList.add("selected");
   const c=activeTopic?getChat(activeTopic):null;
   const av=document.createElement("div"); av.className="av";
-  av.style.background = m.self? "#07C160" : (c?c.color:colorFrom(m.sender||m.name));
-  av.textContent = avatarText(m.self?(myName||"我"):(m.name||"对方"));
+  paintAvatar(av, m.self?(myName||"我"):(m.name||"对方"), m.sender, m.self, m.self?"#07C160":(c?c.color:colorFrom(m.sender||m.name)));
   const b=document.createElement("div"); b.className="bubble";
   appendSenderName(b, m);
   if(m.quote){ const q=document.createElement("div"); q.className="quote";
@@ -1492,8 +1590,7 @@ function mergeBubble(m){
   if(selectMode && selected.has(m.id)) row.classList.add("selected");
   const c=activeTopic?getChat(activeTopic):null;
   const av=document.createElement("div"); av.className="av";
-  av.style.background = m.self? "#07C160" : (c?c.color:colorFrom(m.sender||m.name));
-  av.textContent = avatarText(m.self?(myName||"我"):(m.name||"对方"));
+  paintAvatar(av, m.self?(myName||"我"):(m.name||"对方"), m.sender, m.self, m.self?"#07C160":(c?c.color:colorFrom(m.sender||m.name)));
   const b=document.createElement("div"); b.className="bubble merge";
   const items=m.merge||[];
   let html='<div class="merge-title">聊天记录</div>';
@@ -1517,8 +1614,7 @@ function imageBubble(m){
   if(selectMode && selected.has(m.id)) row.classList.add("selected");
   const c=activeTopic?getChat(activeTopic):null;
   const av=document.createElement("div"); av.className="av";
-  av.style.background = m.self? "#07C160" : (c?c.color:colorFrom(m.sender||m.name));
-  av.textContent = avatarText(m.self?(myName||"我"):(m.name||"对方"));
+  paintAvatar(av, m.self?(myName||"我"):(m.name||"对方"), m.sender, m.self, m.self?"#07C160":(c?c.color:colorFrom(m.sender||m.name)));
   const b=document.createElement("div"); b.className="bubble img";
   appendSenderName(b, m);
   const im=document.createElement("img"); im.src=m.img||""; b.appendChild(im);
@@ -1879,7 +1975,9 @@ function updateTabBadge(){
 function renderMe(){
   const nm = myName || "我";
   $("meName").textContent=nm; $("setNameV").textContent=nm;
-  $("meAvatar").textContent=avatarText(nm); $("meAvatar").style.background=colorFrom(uid);
+  const ma=$("meAvatar");
+  paintAvatar(ma, nm, uid, true, colorFrom(uid));
+  ma.style.cursor="pointer"; ma.title="点击更换头像"; ma.onclick=pickMyAvatar;
   const fv=$("favV"); if(fv) fv.textContent=lsGet("fc_favs",[]).length;
   const wx=$("wxId"); if(wx) wx.textContent = session?session.user:"-";
   const av=$("acctV"); if(av) av.textContent = session?session.user:"-";
@@ -1930,8 +2028,11 @@ function syncNative(){
   if(typeof AndroidBridge!=="undefined"){
     try{
       AndroidBridge.setUid(uid);
-      if(AndroidBridge.setRooms) AndroidBridge.setRooms(JSON.stringify(chats.map(c=>({topic:c.topic, name:c.name, mute:!!c.mute}))));
-      else if(AndroidBridge.setRoom && chats[0]) AndroidBridge.setRoom(chats[0].topic);
+      // 除会话外，额外把"我的收件箱"纳入原生后台轮询（仅用于接收好友请求/回执；不额外增加请求频率）
+      const rooms = chats.map(c=>({topic:c.topic, name:c.name, mute:!!c.mute}));
+      rooms.push({topic:MY_INBOX, name:"__inbox__", mute:true});
+      if(AndroidBridge.setRooms) AndroidBridge.setRooms(JSON.stringify(rooms));
+      else if(AndroidBridge.setRoom) AndroidBridge.setRoom(chats[0]?chats[0].topic:MY_INBOX);
     }catch(e){}
   }
 }
@@ -2169,8 +2270,9 @@ function deleteChat(topic){
 function openAddDialog(){
   openSheet([
     {label:"发起群聊", fn:()=>createGroup()},
-    {label:"添加好友（私聊）", fn:()=>createPrivate()},
-    {label:"加入聊天（邀请码/链接）", fn:()=>joinChat()},
+    {label:"扫一扫加好友", fn:()=>scanAddFriend()},
+    {label:"我的二维码", fn:()=>showMyQr()},
+    {label:"加入群聊（邀请码/链接）", fn:()=>joinChat()},
   ]);
 }
 function createGroup(){
@@ -2185,16 +2287,122 @@ function createGroup(){
     toast("群聊已创建，把邀请发给家人即可多人聊天");
   });
 }
-function createPrivate(){
-  promptDialog("添加好友（私聊）","给这位家人起个备注名（如：爸爸、小明）：","",(fn)=>{
-    fn=(fn||"").trim(); if(!fn) return;
-    const topic = "fc"+Math.random().toString(36).slice(2,12);
-    const c=mkChat(fn, topic); c.type="single"; c.peer=fn; chats.unshift(c); saveChats(); syncNative();
-    connectTopic(topic); renderChats(); updateTabBadge();
-    showInvite(c, {private:true});
-    toast("私聊已创建，把邀请发给 TA 即可一对一聊天");
-  }, true);
+function ensureJsQR(cb){
+  if(window.jsQR){ cb&&cb(); return; }
+  try{
+    const s=document.createElement("script"); s.src="jsqr.js";
+    s.onload=()=>{ cb&&cb(); };
+    s.onerror=()=>{ toast("扫码组件加载失败"); };
+    document.head.appendChild(s);
+  }catch(e){ toast("扫码组件加载失败"); }
 }
+// 扫码加好友：相机 + jsQR 解码（仅用户主动触发，不后台运行）
+let _scanStream=null;
+function scanAddFriend(){ ensureJsQR(()=>startCameraScan()); }
+function startCameraScan(){
+  const ov=$("scanOverlay"), v=$("scanVideo"), hint=$("scanHint");
+  ov.classList.add("show"); hint.textContent="将对方的「我的二维码」放入框内";
+  const stop=()=>{ if(_scanStream){ _scanStream.getTracks().forEach(t=>t.stop()); _scanStream=null; } ov.classList.remove("show"); };
+  $("scanCancel").onclick=stop;
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){ hint.textContent="当前环境不支持摄像头，请用「我的二维码」让对方扫码"; return; }
+  navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}}).then(stream=>{
+    _scanStream=stream; v.srcObject=stream; v.play();
+    const tick=()=>{
+      if(!_scanStream) return;
+      if(v.videoWidth>0){
+        const cv=document.createElement("canvas"); cv.width=v.videoWidth; cv.height=v.videoHeight;
+        const ctx=cv.getContext("2d"); ctx.drawImage(v,0,0,cv.width,cv.height);
+        try{
+          const code=window.jsQR(ctx.getImageData(0,0,cv.width,cv.height).data, cv.width, cv.height);
+          if(code && code.data){ onScanResult(code.data); stop(); return; }
+        }catch(e){}
+      }
+      requestAnimationFrame(tick);
+    };
+    tick();
+  }).catch(err=>{ hint.textContent="无法打开摄像头："+(err&&err.name||"权限被拒")+"（可在系统设置中允许相机权限）"; });
+}
+function onScanResult(data){
+  const m=data.match(/^fcuser:\/\/([^/]+)\/(.+)$/);
+  if(!m){ toast("不是有效的好友二维码"); return; }
+  const theirUid=m[1], theirName=decodeURIComponent(m[2]);
+  if(theirUid===uid){ toast("这是你自己的二维码哦"); return; }
+  sendFriendRequest(theirUid, theirName);
+}
+// 发送好友请求：建立"待同意"私聊，并把请求发到对方收件箱（对方同意后双方才正式建立）
+function sendFriendRequest(theirUid, theirName){
+  const topic="fc"+Math.random().toString(36).slice(2,12);
+  const c=mkChat(uniqueName("等待 "+theirName+" 同意","single"), topic);
+  c.type="single"; c.peer=theirName; c.peerUid=theirUid; c.pending=true;
+  chats.unshift(c); saveChats(); syncNative(); connectTopic(topic);
+  addLocalMsg(topic, {id:"sysfr-"+Date.now(), sender:uid, name:"", text:"已向「"+theirName+"」发送好友请求，等待对方同意", type:"sysrec", time:Date.now()/1000, self:false});
+  try{ fetch(BASE+"/inbox_"+theirUid, {method:"POST", headers:{ "Title":"friend_req", "Tags": uid+",friend_req_"+topic, "Priority":"min" }, body: JSON.stringify({topic, fromUid:uid, fromName:myName||"我", myInbox:MY_INBOX})}); }catch(e){}
+  toast("已发送好友请求");
+}
+// 收到好友请求：弹确认（同意/拒绝）。同意才建立私聊并回执。
+function applyFriendReq(topic, body){
+  const fromName=body.fromName||"对方", fromUid=body.fromUid||"", back=body.myInbox||MY_INBOX;
+  dialogCard(`<div class="ct">好友请求</div><div class="cb">${escapeHtml(fromName)} 想加你为好友</div><div class="cactions"><button class="ghost" id="frRej">拒绝</button><button id="frOk">同意</button></div>`);
+  $("frRej").onclick=()=>{ closeDialog(); try{ fetch(BASE+"/"+back, {method:"POST", headers:{ "Title":"friend_rej", "Tags": uid+",friend_rej_"+topic, "Priority":"min" }, body:""}); }catch(e){} };
+  $("frOk").onclick=()=>{
+    closeDialog();
+    const c=mkChat(uniqueName(fromName,"single"), topic); c.type="single"; c.peer=fromName; c.peerUid=fromUid; c.pending=false;
+    chats.unshift(c); saveChats(); syncNative(); connectTopic(topic);
+    addLocalMsg(topic, {id:"sysfa-"+Date.now(), sender:uid, name:"", text:"你们已成为好友，可以开始聊天啦", type:"sysrec", time:Date.now()/1000, self:false});
+    try{ fetch(BASE+"/"+back, {method:"POST", headers:{ "Title":"friend_ack", "Tags": uid+",friend_ack_"+topic, "Priority":"min" }, body:""}); }catch(e){}
+    renderChats(); toast("已同意");
+  };
+}
+function applyFriendAck(topic){
+  const c=getChat(topic); if(!c) return;
+  c.pending=false; saveChats();
+  addLocalMsg(topic, {id:"sysfa-"+Date.now(), sender:uid, name:"", text:"对方已同意，你们已成为好友", type:"sysrec", time:Date.now()/1000, self:false});
+  renderChats(); if(activeTopic===topic) renderChatFull(topic);
+}
+function applyFriendRej(topic){
+  const c=getChat(topic); if(!c) return;
+  addLocalMsg(topic, {id:"sysfr-"+Date.now(), sender:uid, name:"", text:"对方拒绝了你的好友请求", type:"sysrec", time:Date.now()/1000, self:false});
+  c.pending=false; c.name=c.name.replace("等待 ","").replace(" 同意",""); saveChats();
+  renderChats(); if(activeTopic===topic) renderChatFull(topic);
+}
+// 我的二维码：验证用名片（fcuser://uid/name），非可加入链接，避免未授权访问
+function showMyQr(){
+  const data="fcuser://"+uid+"/"+encodeURIComponent(myName||"我");
+  dialogCard(`
+    <div class="ct">我的二维码</div>
+    <div class="cb">让家人用 App 扫一扫即可向你发起好友请求（需你同意）。</div>
+    <div class="myqr-wrap"><div class="myqr-box" id="myQr"></div>
+    <div class="myqr-id">家聊号：${escapeHtml(uid)}</div>
+    <div class="myqr-tip">昵称：${escapeHtml(myName||"我")}</div></div>
+    <div class="cactions"><button class="ghost" id="dClose">关闭</button></div>
+  `);
+  $("dClose").onclick=closeDialog;
+  ensureQrcodeLib(()=>{ try{ const qr=window.qrcode(0,'M'); qr.addData(data); qr.make(); const box=$("myQr"); if(box) box.innerHTML=qr.createSvgTag({cellSize:5,margin:3}); }catch(e){} });
+}
+function updatePresenceUI(sender){
+  chats.forEach(c=>{ if((c.type==="group"&&(c.members||[]).some(m=>m.uid===sender))||c.peerUid===sender){ c.online=isOnline(sender); } });
+  renderChats();
+  if(activeTopic){ const c=getChat(activeTopic); if(c&&c.peerUid===sender) renderPresenceTitle(c); }
+}
+function renderPresenceTitle(c){
+  const t=$("chatTitle"); if(!t) return;
+  if(c.type!=="group"&&c.peerUid){ t.innerHTML=escapeHtml(c.name)+(isOnline(c.peerUid)?' <span class="pdot" style="position:static;display:inline-block;width:8px;height:8px;margin-left:4px"></span>':''); }
+}
+// 头像：本地选图 → 广播给所有私聊/群成员（仅变更时一次，不轮询）
+function pickMyAvatar(){
+  const inp=document.createElement("input"); inp.type="file"; inp.accept="image/*";
+  inp.onchange=()=>{ const f=inp.files&&inp.files[0]; if(!f) return; const rd=new FileReader();
+    rd.onload=()=>{ myAvatar=rd.result; localStorage.setItem("fc_avatar",myAvatar); renderMe(); broadcastAvatar(); toast("头像已更新"); };
+    rd.readAsDataURL(f); };
+  inp.click();
+}
+function broadcastAvatar(){
+  chats.forEach(c=>{
+    if(c.type==="group"){ (c.members||[]).forEach(m=>{ if(m.uid&&m.uid!==uid) sendAvatar(c.topic, m.uid); }); }
+    else if(c.peerUid&&c.peerUid!==uid){ sendAvatar(c.topic, c.peerUid); }
+  });
+}
+function sendAvatar(topic, peerUid){ try{ fetch(BASE+"/"+topic,{method:"POST", headers:{ "Title":"avt", "Tags": uid+",avt_"+peerUid, "Priority":"min" }, body: myAvatar}); }catch(e){} }
 function joinChat(){
   promptDialog("加入聊天","输入家人分享的「邀请码」或「邀请链接」：","",(raw)=>{
     raw=(raw||"").trim(); if(!raw) return;
@@ -2222,7 +2430,8 @@ function joinChat(){
   }, true);
 }
 function finalizePrivate(topic, friendName){
-  const c=mkChat(friendName, topic); c.type="single"; c.peer=friendName;
+  const name=uniqueName(friendName,"single");
+  const c=mkChat(name, topic); c.type="single"; c.peer=name;
   chats.unshift(c); saveChats(); syncNative();
   connectTopic(topic); loadHistory(topic); renderChats(); updateTabBadge();
   setTimeout(()=>openChat(topic),300);
@@ -2404,8 +2613,9 @@ $("clearAll").onclick=()=>confirmDialog("清空所有聊天记录","将删除全
 $("about").onclick=()=>{ dialogCard(`<div class="ct">关于家聊</div><div class="cb">家聊 · 免服务器家庭聊天<br>消息经免费公共服务中转<br>后台/关闭也能收到通知<br><br>版本 v2.0（微信风格）</div><div class="cactions"><button id="dOk">好的</button></div>`); $("dOk").onclick=closeDialog; };
 $("inviteFriend").onclick=()=>{
   const link=(location.protocol.indexOf("http")===0?location.origin+location.pathname:"https://15816563131.github.io/family-chat-app/");
-  dialogCard(`<div class="ct">分享家聊</div><div class="cb">把链接发给家人，他们也能用浏览器或安装 APP 使用。</div><div class="linkbox" id="applink">${escapeHtml(link)}</div><div class="cactions"><button id="dCopyApp">复制链接</button></div>`);
+  dialogCard(`<div class="ct">分享家聊</div><div class="cb">把链接发给家人，他们也能用浏览器或安装 APP 使用。</div><div class="linkbox" id="applink">${escapeHtml(link)}</div><div class="cactions"><button class="ghost" id="dClose">关闭</button><button id="dCopyApp">复制链接</button></div>`);
   $("dCopyApp").onclick=()=>copyText(link,"链接已复制");
+  $("dClose").onclick=closeDialog;
 };
 $("addBtn").onclick=openAddDialog;
 
@@ -2541,6 +2751,8 @@ $("sheetMask").onclick=(e)=>{ if(e.target===$("sheetMask")) closeSheet(); };
 
 function dialogCard(html){ $("dialogCard").innerHTML=html; $("dialog").classList.add("show"); }
 function closeDialog(){ $("dialog").classList.remove("show"); }
+// 点击遮罩空白处关闭弹窗（避免某些弹窗无关闭入口而卡死）
+$("dialog").onclick=(e)=>{ if(e.target===$("dialog")) closeDialog(); };
 function promptDialog(title, desc, def, cb, multiline, type){
   const inputHtml = multiline
     ? `<textarea id="dInput" placeholder="">${escapeHtml(def||"")}</textarea>`
@@ -2607,6 +2819,7 @@ function afterName(){
   // 点击群名 → 群信息/成员管理
   $("chatTitle").onclick=()=>{ const c=getChat(activeTopic); if(c && c.type==="group") openGroupInfo(c); };
   connectAll(); syncNative();
+  connectTopic(MY_INBOX); // 订阅个人收件箱（好友请求/回执通道），不轮询、不耗电
   // 后台预加载二维码库，首次打开邀请即可即时显示
   ensureQrcodeLib(function(){});
   if(!appBooted){
@@ -2627,8 +2840,9 @@ function afterName(){
     }, 60000);
     // 周期性广播自己的 Web Push 订阅（便于其他浏览器端推送）；shareSubscription 内部已做 10 分钟节流
     setInterval(()=>{ chats.forEach(c=>shareSubscription(c.topic)); }, 300000);
-    // 页面显隐时刷新未读
-    document.addEventListener("visibilitychange",()=>{ if(!document.hidden) renderChats(); });
+    // 页面显隐时刷新未读 + 事件驱动同步在线状态（仅切换时广播一次，无心跳）
+    document.addEventListener("visibilitychange",()=>{ fcSetForeground(!document.hidden); if(!document.hidden) renderChats(); });
+    window.fcSetForeground = fcSetForeground; // 供 APK 原生层（onResume/onPause）调用
     // 进入后台时通知原生
     if(typeof AndroidBridge!=="undefined"){ window.notifyAppBackground=()=>{ try{AndroidBridge.notifyBackground&&AndroidBridge.notifyBackground();}catch(e){} }; window.notifyAppForeground=()=>{ try{AndroidBridge.notifyForeground&&AndroidBridge.notifyForeground();}catch(e){} }; }
     // 周期检查消息提醒（纯本地）
