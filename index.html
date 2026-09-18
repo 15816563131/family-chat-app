@@ -2130,6 +2130,13 @@ function knownNames(topic){
   getMsgs(topic).forEach(x=>{ if(x.name && !x.self && x.name!==myName && !set[x.name]){ set[x.name]=1; out.push(x.name); } });
   return out;
 }
+// 群 @ 候选：c.members + 本会话历史中出现过的成员名（免服务器也能 @ 到聊过天的人）
+function groupAtCandidates(c){
+  const set={}; const out=[];
+  (c.members||[]).forEach(m=>{ if(m.uid!==uid && m.name && m.name!==myName && !set[m.name]){ set[m.name]=1; out.push(m.name); } });
+  if(c.topic) getMsgs(c.topic).forEach(x=>{ if(x.name && !x.self && x.name!==myName && !set[x.name]){ set[x.name]=1; out.push(x.name); } });
+  return out;
+}
 function showAtPicker(names, ta){
   atPickerNames=names; const pop=$("atPop"); pop.innerHTML="";
   names.forEach(n=>{ const d=document.createElement("div"); d.textContent=n; d.onclick=()=>insertAtName(n, ta); pop.appendChild(d); });
@@ -2249,8 +2256,9 @@ $("emojiBtn").onclick=()=>{ const p=$("emojiPanel"); buildEmoji(); p.classList.t
 $("atBtn").onclick=()=>{
   const c=getChat(activeTopic);
   if(!c || c.type!=="group"){ toast("私聊直接发就好啦~"); return; }
+  const names=groupAtCandidates(c);
   const opts=[{label:"@所有人", fn:()=>insertAt("@所有人 ")}];
-  (c.members||[]).filter(m=>m.uid!==uid).forEach(m=>{ const nm=m.name||"成员"; opts.push({label:"@"+nm, fn:()=>insertAt("@"+nm+" ")}); });
+  names.forEach(nm=>{ if(nm) opts.push({label:"@"+nm, fn:()=>insertAt("@"+nm+" ")}); });
   openSheet(opts);
 };
 function insertAt(txt){
