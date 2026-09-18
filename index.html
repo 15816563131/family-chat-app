@@ -817,6 +817,9 @@ let myName = localStorage.getItem("fc_name") || "";
 
 // ---------- 头像 / 在线状态 / 收件箱（免服务器，纯本地 + ntfy 控制消息，不轮询） ----------
 const MY_INBOX = "inbox_"+uid;             // 每个人的「收件箱」话题，仅用于接收好友请求/回执，不轮询、不耗电
+const seenFriend = lsGet("fc_seen_friend", {}); // 已处理的好友控制消息 topic，避免历史回放重复弹窗
+function markSeenFriend(t){ if(t){ seenFriend[t]=1; lsSet("fc_seen_friend", seenFriend); } }
+function isSeenFriend(t){ return !!(t && seenFriend[t]); }
 let myAvatar = localStorage.getItem("fc_avatar")||"";
 let peerAvatars = lsGet("fc_peer_avatars", {});   // uid -> dataURL
 let peerPresence = lsGet("fc_peer_presence", {}); // uid -> 最近一次"在线"时间戳(ms)，0 表示离线
@@ -1038,6 +1041,7 @@ function closeUnified(){
 // 把所有会话 topic 拼成 ntfy 多 topic SSE（/t1/t2/t3/sse，ntfy 原生支持，单连接覆盖多房间）
 function buildSseUrl(){
   const topics = chats.map(c=>c.topic).filter(Boolean);
+  topics.push(MY_INBOX); // 始终订阅个人收件箱，接收好友请求/回执（不轮询、零额外耗电）
   if(!topics.length) return null;
   return BASE + "/" + topics.join("/") + "/sse";
 }
@@ -1086,9 +1090,11 @@ function connectTopic(topic){
 function connectAll(){
   const topics = chats.map(c=>c.topic).filter(Boolean);
   topics.forEach((t,i)=> setTimeout(()=>{ if(document.visibilityState!=="hidden") loadHistory(t); }, i*400));
+  loadHistory(MY_INBOX); // 补拉收件箱历史，兜住「App 关闭时收到的好友请求/回执」
   ensureConnection();
 }
 function loadHistory(topic){
+  if(typeof fetch!=="function") return; // 极旧环境/测试容器无 fetch 时安全跳过
   const since = getLast(topic);
   fetch(BASE+"/"+topic+"/json?since="+since).then(r=>r.json()).then(arr=>{
     (arr||[]).forEach(m=>handleIncoming(topic, m, true));
@@ -1147,11 +1153,14 @@ function handleIncoming(topic, m, fromHistory){
   if(presTag){ if(sender!==uid){ const on = presTag.indexOf("pres_on")>=0; if(on) peerPresence[sender]=Date.now(); else peerPresence[sender]=0; savePeerPresence(); updatePresenceUI(sender); } return; }
   // 好友请求 / 回执（走个人收件箱，topic 即本机收件箱）
   const freqTag = tags.find(t=>typeof t==="string" && t.indexOf("friend_req_")===0);
-  if(freqTag){ if(sender!==uid){ try{ applyFriendReq(freqTag.slice("friend_req_".length), JSON.parse(m.message||"{}")); }catch(e){} } return; }
+  if(freqTag){ if(sender!==uid){ const ft=freqTag.slice("friend_req_".length); if(!isSeenFriend(ft)){ try{ applyFriendReq(ft, JSON.parse(m.message||"{}")); }catch(e){} } } return; }
   const fackTag = tags.find(t=>typeof t==="string" && t.indexOf("friend_ack_")===0);
-  if(fackTag){ if(sender!==uid){ applyFriendAck(fackTag.slice("friend_ack_".length)); } return; }
+  if(fackTag){ if(sender!==uid){ const at=fackTag.slice("friend_ack_".length); if(!isSeenFriend(at)){ markSeenFriend(at); applyFriendAck(at); } } return; }
   const frejTag = tags.find(t=>typeof t==="string" && t.indexOf("friend_rej_")===0);
-  if(frejTag){ if(sender!==uid){ applyFriendRej(frejTag.slice("friend_rej_".length)); } return; }
+  if(frejTag){ if(sender!==uid){ const rt=frejTag.slice("friend_rej_".length); if(!isSeenFriend(rt)){ markSeenFriend(rt); applyFriendRej(rt); } } return; }
+  // 直接加好友回执（扫码/搜索）：对方已把你加为好友，本端也立即建立私聊，无需同意
+  const faddTag = tags.find(t=>typeof t==="string" && t.indexOf("friend_add_")===0);
+  if(faddTag){ if(sender!==uid){ const at=faddTag.slice("friend_add_".length); if(!isSeenFriend(at)){ try{ applyFriendAdd(at, JSON.parse(m.message||"{}")); }catch(e){} } } return; }
   if(sender===uid) return; // 跳过自己（含撤回/打字回声）
   // 撤回控制消息：tags 含 recall_<id>
   const recallTag = tags.find(t=>typeof t==="string" && t.indexOf("recall_")===0);
@@ -2271,9 +2280,20 @@ function openAddDialog(){
   openSheet([
     {label:"发起群聊", fn:()=>createGroup()},
     {label:"扫一扫加好友", fn:()=>scanAddFriend()},
+    {label:"搜索家聊号添加", fn:()=>searchAddFriend()},
     {label:"我的二维码", fn:()=>showMyQr()},
     {label:"加入群聊（邀请码/链接）", fn:()=>joinChat()},
   ]);
+}
+function searchAddFriend(){
+  promptDialog("添加好友","输入对方「家聊号」（也可直接粘贴 fcuser:// 链接）：","",(raw)=>{
+    raw=(raw||"").trim(); if(!raw) return;
+    const m=raw.match(/^fcuser:\/\/([^/]+)\/(.+)$/);
+    if(m){ addFriendDirect(m[1], decodeURIComponent(m[2])); return; }
+    const code=raw.replace(/[^a-zA-Z0-9_-]/g,"");
+    if(!code){ toast("家聊号无效"); return; }
+    addFriendDirect(code, "家聊用户");
+  }, true);
 }
 function createGroup(){
   promptDialog("发起群聊","给群聊起个名字（如：一家老小）","",(name)=>{
@@ -2323,11 +2343,16 @@ function startCameraScan(){
   }).catch(err=>{ hint.textContent="无法打开摄像头："+(err&&err.name||"权限被拒")+"（可在系统设置中允许相机权限）"; });
 }
 function onScanResult(data){
-  const m=data.match(/^fcuser:\/\/([^/]+)\/(.+)$/);
-  if(!m){ toast("不是有效的好友二维码"); return; }
+  let m=data.match(/^fcuser:\/\/([^/]+)\/(.+)$/);
+  if(!m){
+    // 容忍直接扫到/粘贴的家聊号
+    const code=(data||"").trim().replace(/[^a-zA-Z0-9_-]/g,"");
+    if(code && code.indexOf("inbox_")!==0){ addFriendDirect(code, "家聊用户"); return; }
+    toast("不是有效的好友二维码或家聊号"); return;
+  }
   const theirUid=m[1], theirName=decodeURIComponent(m[2]);
   if(theirUid===uid){ toast("这是你自己的二维码哦"); return; }
-  sendFriendRequest(theirUid, theirName);
+  addFriendDirect(theirUid, theirName);
 }
 // 发送好友请求：建立"待同意"私聊，并把请求发到对方收件箱（对方同意后双方才正式建立）
 function sendFriendRequest(theirUid, theirName){
@@ -2343,8 +2368,9 @@ function sendFriendRequest(theirUid, theirName){
 function applyFriendReq(topic, body){
   const fromName=body.fromName||"对方", fromUid=body.fromUid||"", back=body.myInbox||MY_INBOX;
   dialogCard(`<div class="ct">好友请求</div><div class="cb">${escapeHtml(fromName)} 想加你为好友</div><div class="cactions"><button class="ghost" id="frRej">拒绝</button><button id="frOk">同意</button></div>`);
-  $("frRej").onclick=()=>{ closeDialog(); try{ fetch(BASE+"/"+back, {method:"POST", headers:{ "Title":"friend_rej", "Tags": uid+",friend_rej_"+topic, "Priority":"min" }, body:""}); }catch(e){} };
+  $("frRej").onclick=()=>{ markSeenFriend(topic); closeDialog(); try{ fetch(BASE+"/"+back, {method:"POST", headers:{ "Title":"friend_rej", "Tags": uid+",friend_rej_"+topic, "Priority":"min" }, body:""}); }catch(e){} };
   $("frOk").onclick=()=>{
+    markSeenFriend(topic);
     closeDialog();
     const c=mkChat(uniqueName(fromName,"single"), topic); c.type="single"; c.peer=fromName; c.peerUid=fromUid; c.pending=false;
     chats.unshift(c); saveChats(); syncNative(); connectTopic(topic);
@@ -2355,22 +2381,54 @@ function applyFriendReq(topic, body){
 }
 function applyFriendAck(topic){
   const c=getChat(topic); if(!c) return;
+  markSeenFriend(topic);
   c.pending=false; saveChats();
   addLocalMsg(topic, {id:"sysfa-"+Date.now(), sender:uid, name:"", text:"对方已同意，你们已成为好友", type:"sysrec", time:Date.now()/1000, self:false});
   renderChats(); if(activeTopic===topic) renderChatFull(topic);
 }
 function applyFriendRej(topic){
   const c=getChat(topic); if(!c) return;
+  markSeenFriend(topic);
   addLocalMsg(topic, {id:"sysfr-"+Date.now(), sender:uid, name:"", text:"对方拒绝了你的好友请求", type:"sysrec", time:Date.now()/1000, self:false});
   c.pending=false; c.name=c.name.replace("等待 ","").replace(" 同意",""); saveChats();
   renderChats(); if(activeTopic===topic) renderChatFull(topic);
+}
+// 直接加好友（扫码/搜索）：双方立即成为好友，无需对方同意
+function addFriendDirect(theirUid, theirName){
+  if(!theirUid || theirUid===uid){ toast("家聊号无效"); return; }
+  const existing = chats.find(c=>c.peerUid===theirUid && c.type==="single");
+  const topic = existing? existing.topic : ("fc"+Math.random().toString(36).slice(2,12));
+  let c=existing;
+  if(!c){ c=mkChat(uniqueName(theirName,"single"), topic); chats.unshift(c); }
+  c.type="single"; c.peer=theirName; c.peerUid=theirUid; c.pending=false;
+  saveChats(); syncNative(); connectTopic(topic);
+  if(!existing) addLocalMsg(topic, {id:"sysfa-"+Date.now(), sender:uid, name:"", text:"你已添加「"+theirName+"」为好友，可以开始聊天啦", type:"sysrec", time:Date.now()/1000, self:false});
+  // 通知对方也建立私聊（走对方收件箱，免同意）
+  try{ fetch(BASE+"/inbox_"+theirUid, {method:"POST", headers:{ "Title":"friend_add", "Tags": uid+",friend_add_"+topic, "Priority":"min" }, body: JSON.stringify({topic, fromUid:uid, fromName:myName||"我"})}); }catch(e){}
+  renderChats(); updateTabBadge(); toast("已添加为好友");
+}
+// 收到对方的「直接加好友」回执：本端也建立私聊
+function applyFriendAdd(topic, body){
+  if(!topic) return;
+  if(isSeenFriend(topic)) return;
+  markSeenFriend(topic);
+  const fromUid=body.fromUid||"", fromName=body.fromName||"对方";
+  const existing = chats.find(c=>c.topic===topic || c.peerUid===fromUid);
+  let c=existing;
+  if(!c){ c=mkChat(uniqueName(fromName,"single"), topic); chats.unshift(c); }
+  c.type="single"; c.peer=fromName; c.peerUid=fromUid; c.pending=false;
+  saveChats(); syncNative(); connectTopic(topic);
+  if(!existing) addLocalMsg(topic, {id:"sysfa-"+Date.now(), sender:uid, name:"", text:"「"+fromName+"」已添加你为好友", type:"sysrec", time:Date.now()/1000, self:false});
+  renderChats(); updateTabBadge();
+  if(activeTopic===topic) renderChatFull(topic);
+  toast("「"+fromName+"」已添加你为好友");
 }
 // 我的二维码：验证用名片（fcuser://uid/name），非可加入链接，避免未授权访问
 function showMyQr(){
   const data="fcuser://"+uid+"/"+encodeURIComponent(myName||"我");
   dialogCard(`
     <div class="ct">我的二维码</div>
-    <div class="cb">让家人用 App 扫一扫即可向你发起好友请求（需你同意）。</div>
+    <div class="cb">让家人用 App 扫一扫即可直接加你为好友（无需同意）。</div>
     <div class="myqr-wrap"><div class="myqr-box" id="myQr"></div>
     <div class="myqr-id">家聊号：${escapeHtml(uid)}</div>
     <div class="myqr-tip">昵称：${escapeHtml(myName||"我")}</div></div>
