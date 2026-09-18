@@ -194,6 +194,12 @@
   .sch-item{display:flex;justify-content:space-between;align-items:center;background:#f7f7f7;border-radius:8px;padding:8px 12px;font-size:13px}
   .sch-t{color:#444;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;margin-right:8px;text-align:left}
   .sch-x{color:var(--wx-red,#e64340);cursor:pointer;flex:none;padding:2px 4px}
+  .bubble.card-msg{max-width:230px;padding:10px}
+  .vcard{display:flex;align-items:center;gap:10px;cursor:pointer}
+  .vcard-av{width:42px;height:42px;border-radius:8px;flex:none;font-size:18px}
+  .vcard-info{flex:1;min-width:0}
+  .vcard-name{font-size:15px;font-weight:600;color:var(--wx-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .vcard-tag{font-size:12px;color:#999;margin-top:2px}
   .codebox{background:var(--wx-input);border-radius:8px;padding:10px;margin:10px 18px 4px;font-size:13px;word-break:break-all;color:var(--wx-text);user-select:all}
   .linkbox{font-size:12px;color:var(--wx-blue);word-break:break-all;padding:0 18px;margin-bottom:8px;user-select:all}
   /* 邀请二维码 */
@@ -1183,6 +1189,9 @@ function handleIncoming(topic, m, fromHistory){
   // 直接加好友回执（扫码/搜索）：对方已把你加为好友，本端也立即建立私聊，无需同意
   const faddTag = tags.find(t=>typeof t==="string" && t.indexOf("friend_add_")===0);
   if(faddTag){ if(sender!==uid){ const at=faddTag.slice("friend_add_".length); if(!isSeenFriend(at)){ try{ applyFriendAdd(at, JSON.parse(m.message||"{}")); }catch(e){} } } return; }
+  // 名片消息：body JSON {card:{uid,name,avatar,topic}}，点击可打开对方私聊
+  const cardTag = tags.find(t=>typeof t==="string" && t==="card");
+  if(cardTag){ if(sender!==uid){ try{ const p=JSON.parse(m.message||"{}"); if(p&&p.card){ addLocalMsg(topic, {id:m.id, sender, name:decTitle(m.title)||"对方", text:"", card:p.card, time:(m.time||Date.now()/1000), self:false, type:"card"}, {silentUnread:false}); if(!fromHistory) playNewMsgCue(topic); } }catch(e){} } return; }
   if(sender===uid) return; // 跳过自己（含撤回/打字回声）
   // 撤回控制消息：tags 含 recall_<id>
   const recallTag = tags.find(t=>typeof t==="string" && t.indexOf("recall_")===0);
@@ -1389,6 +1398,38 @@ function openScheduleDialog(){
   };
 }
 
+// ===== 名片分享（微信式：把某位好友的名片作为消息卡片发出） =====
+// card = { uid, name, avatar, topic }；topic 为该好友的私聊话题（便于对方直接打开）
+async function sendCardMsg(topic, card){
+  if(!card || !card.name) return;
+  const name = myName || "我";
+  const id = "local-"+Date.now()+"-"+Math.random().toString(36).slice(2,6);
+  const body = JSON.stringify({card:card});
+  addLocalMsg(topic, {id, sender:uid, name, type:"card", card, time:Date.now()/1000, self:true, status:"sending"}, {silentUnread:true});
+  try{
+    await fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":encTitle(name), "Tags":uid+",card", "Priority":"3" }, body:body});
+    updateMsgStatus(topic, id, "delivered");
+    const subs = lsGet("fc_subs_"+topic, []); for(const s of subs){ if(window.FC_PUSH) FC_PUSH.sendPush(s, {title:name, body:"[名片] "+card.name}).catch(()=>{}); }
+  }catch(e){ updateMsgStatus(topic, id, "failed"); toast("发送失败，点击重发"); }
+}
+// 点击名片：打开此人的私聊（若存在），否则提示去加好友
+function openCardTarget(card){
+  if(!card) return;
+  let t = card.topic && getChat(card.topic);
+  if(!t && card.uid){ t = chats.find(c=>c.type!=="group" && c.peerUid===card.uid); }
+  if(t){ openChat(t.topic); }
+  else { toast("你和 "+(card.name||"TA")+" 还没有私聊，去通讯录加好友吧"); }
+}
+// 在当前聊天里挑选一位好友，把 TA 的名片发进来
+function showCardPicker(topic){
+  const friends=chats.filter(c=>!c.hidden && c.type!=="group");
+  if(!friends.length){ toast("还没有好友可分享"); return; }
+  openSheet(friends.map(c=>({
+    label:"👤 "+c.name,
+    fn:()=>{ const card={uid:c.peerUid||"", name:c.name, avatar:peerAvatars[c.peerUid||""]||null, topic:c.topic}; sendCardMsg(topic, card); toast("已发送名片："+c.name); }
+  })));
+}
+
 function updateMsgStatus(topic, id, status){
   const msgs=getMsgs(topic); const m=msgs.find(x=>x.id===id);
   if(!m) return; m.status=status; setMsgs(topic, msgs);
@@ -1487,6 +1528,10 @@ function retrySend(topic, id){
     const blob=dataURLToBlob(m.voice);
     if(blob){ fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":encTitle(myName||"我"), "Tags":uid, "Priority":"3", "Content-Type":(blob.type||"audio/webm"), "X-Filename":"voice-"+(m.dur||0)+".webm" }, body:blob})
       .then(()=>updateMsgStatus(topic, id, "delivered")).catch(()=>updateMsgStatus(topic, id, "failed")); return; }
+  }
+  if(m.type==="card" && m.card){
+    fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":encTitle(myName||"我"), "Tags":uid+",card", "Priority":"3" }, body:JSON.stringify({card:m.card})})
+      .then(()=>updateMsgStatus(topic, id, "delivered")).catch(()=>updateMsgStatus(topic, id, "failed")); return;
   }
   fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":encTitle(myName||"我"), "Tags":uid, "Priority":"3" }, body:m.text})
     .then(()=>updateMsgStatus(topic, id, "delivered"))
@@ -1667,6 +1712,7 @@ function bubbleEl(m){
   if(m.type==="pat"||m.type==="sysrec"){ return patLineEl(m.text); }
   if(m.type==="image"){ return imageBubble(m); }
   if(m.type==="voice"){ return voiceBubble(m); }
+  if(m.type==="card"){ return cardBubble(m); }
   if(m.merge){ return mergeBubble(m); }
   const row=document.createElement("div"); row.className="row "+(m.self?"me":"other"); row.dataset.id=m.id;
   if(selectMode && selected.has(m.id)) row.classList.add("selected");
@@ -1757,7 +1803,34 @@ function imageBubble(m){
   attachLongPress(row, ()=>showMsgMenu(m));
   return row;
 }
-// 收到附件（图片/语音）后，尽量抓回本地 dataURL 以便长期可见（ntfy 附件会过期）
+function cardBubble(m){
+  const row=document.createElement("div"); row.className="row "+(m.self?"me":"other"); row.dataset.id=m.id;
+  if(selectMode && selected.has(m.id)) row.classList.add("selected");
+  const c=activeTopic?getChat(activeTopic):null;
+  const av=document.createElement("div"); av.className="av";
+  paintAvatar(av, m.self?(myName||"我"):(m.name||"对方"), m.sender, m.self, m.self?"#07C160":(c?c.color:colorFrom(m.sender||m.name)));
+  const b=document.createElement("div"); b.className="bubble card-msg";
+  appendSenderName(b, m);
+  const card=m.card||{};
+  const inner=document.createElement("div"); inner.className="vcard";
+  const cav=document.createElement("div"); cav.className="vcard-av"; paintAvatar(cav, card.name||"", card.uid||"", false, "#07C160");
+  const cinfo=document.createElement("div"); cinfo.className="vcard-info";
+  const cn=document.createElement("div"); cn.className="vcard-name"; cn.textContent=card.name||"家人";
+  const ct=document.createElement("div"); ct.className="vcard-tag"; ct.textContent="个人名片";
+  cinfo.appendChild(cn); cinfo.appendChild(ct);
+  inner.appendChild(cav); inner.appendChild(cinfo);
+  b.appendChild(inner);
+  inner.onclick=()=>{ if(selectMode) return; openCardTarget(card); };
+  const cbcol=document.createElement("div"); cbcol.className="bcol"; cbcol.appendChild(b); const crb=reactionBlock(m); if(crb) cbcol.appendChild(crb);
+  row.appendChild(av); row.appendChild(cbcol);
+  if(m.self){
+    const st=document.createElement("div"); st.className="st"+(m.status==="failed"?" fail":"")+(m.read?" read":"");
+    let label=""; if(m.status==="sending") label="⏳"; else if(m.status==="failed") label="⚠ 重发"; else if(m.read) label="已读"; else if(m.status==="delivered") label="已送达";
+    st.textContent=label; if(m.status==="failed") st.onclick=()=>retrySend(activeTopic, m.id); row.appendChild(st);
+  }
+  attachLongPress(row, ()=>showMsgMenu(m));
+  return row;
+}
 function tryUpgradeAttachment(topic, id, url, kind){
   try{
     fetch(url).then(r=>{ if(!r.ok) throw 0; return r.blob(); }).then(b=>{ const rd=new FileReader(); rd.onload=()=>{ const url2=rd.result; const msgs=getMsgs(topic); const x=msgs.find(z=>z.id===id); if(x){ if(kind==="voice") x.voice=url2; else x.img=url2; setMsgs(topic, msgs); if(topic===activeTopic) renderChatFull(topic); } }; rd.readAsDataURL(b); }).catch(()=>{});
@@ -2397,6 +2470,7 @@ $("chatMore").onclick=()=>{
     {label: c.pinned ? "取消置顶" : "置顶聊天", fn:()=>{ c.pinned=!c.pinned; saveChats(); renderChats(); toast(c.pinned?"已置顶":"已取消置顶"); }},
     {label: c.mute ? "允许消息通知" : "消息免打扰", fn:()=>{ c.mute=!c.mute; saveChats(); syncNative(); toast(c.mute?"已免打扰":"已开启通知"); }},
     {label:"邀请家人加入", fn:()=>showInvite(c)},
+    {label:"发名片", fn:()=>showCardPicker(activeTopic)},
     {label:"修改名称", fn:()=>renameChat(c)},
     {label:"搜索聊天记录", fn:()=>startChatSearch()},
     {label:"清空聊天记录", danger:false, fn:()=>confirmDialog("清空聊天记录","将删除该会话的全部消息，确定？",()=>{ setMsgs(activeTopic,[]); c.lastMsg=""; c.lastTime=0; saveChats(); renderChatFull(activeTopic); renderChats(); toast("已清空"); })},
