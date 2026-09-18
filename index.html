@@ -1001,6 +1001,7 @@ function mkChat(name, topic){
   return { name, topic, color: colorFrom(topic), type:"single", members:[], unread:0, lastMsg:"", lastTime:0, order:Date.now(), pinned:false, mute:false, peerUid:"", online:false, pending:false };
 }
 function colorFrom(str){ let h=0; for(let i=0;i<str.length;i++) h=(h*31+str.charCodeAt(i))>>>0; return PAL[h%PAL.length]; }
+window.FC_CHATS=()=>chats; // 调试/扩展句柄：暴露会话数组引用（闭合捕获绑定，调用时返回最新值）
 function saveChats(){ lsSet("fc_chats", chats); }
 function getChat(topic){ return chats.find(c=>c.topic===topic); }
 
@@ -1194,9 +1195,14 @@ function handleIncoming(topic, m, fromHistory){
   // 直接加好友回执（扫码/搜索）：对方已把你加为好友，本端也立即建立私聊，无需同意
   const faddTag = tags.find(t=>typeof t==="string" && t.indexOf("friend_add_")===0);
   if(faddTag){ if(sender!==uid){ const at=faddTag.slice("friend_add_".length); if(!isSeenFriend(at)){ try{ applyFriendAdd(at, JSON.parse(m.message||"{}")); }catch(e){} } } return; }
+  // 群成员注册回执：body JSON {uid,name}，把对方登记进成员表（免服务器无目录）
+  const regTag = tags.find(t=>typeof t==="string" && t.indexOf("reg_")===0);
+  if(regTag){ if(sender!==uid){ try{ const p=JSON.parse(m.message||"{}"); harvestMember(topic, p.uid||sender, p.name||decTitle(m.title)||""); }catch(e){} } return; }
   // 名片消息：body JSON {card:{uid,name,avatar,topic}}，点击可打开对方私聊
   const cardTag = tags.find(t=>typeof t==="string" && t==="card");
-  if(cardTag){ if(sender!==uid){ try{ const p=JSON.parse(m.message||"{}"); if(p&&p.card){ addLocalMsg(topic, {id:m.id, sender, name:decTitle(m.title)||"对方", text:"", card:p.card, time:(m.time||Date.now()/1000), self:false, type:"card"}, {silentUnread:false}); if(!fromHistory) playNewMsgCue(topic); } }catch(e){} } return; }
+  if(cardTag){ if(sender!==uid){ try{ const p=JSON.parse(m.message||"{}"); if(p&&p.card){ addLocalMsg(topic, {id:m.id, sender, name:decTitle(m.title)||"对方", text:"", card:p.card, time:(m.time||Date.now()/1000), self:false, type:"card"}, {silentUnread:false}); if(!fromHistory) playNewMsgCue(topic); } }catch(e){} harvestMember(topic, sender, decTitle(m.title)||"对方"); } return; }
+  // 群聊：把发言者登记进成员表（标题为真实昵称；控制消息已在上面 return 掉）
+  if(sender!==uid){ const sn=decTitle(m.title)||"对方"; if(sn!=="对方") harvestMember(topic, sender, sn); }
   if(sender===uid) return; // 跳过自己（含撤回/打字回声）
   // 撤回控制消息：tags 含 recall_<id>
   const recallTag = tags.find(t=>typeof t==="string" && t.indexOf("recall_")===0);
@@ -1660,10 +1666,13 @@ function renderContacts(){
 
 // ---------- 渲染：聊天详情 ----------
 let activeTopic = null;
+const _regSent = new Set(); // 每个群聊仅广播一次 reg_（省电）
 function openChat(topic){
   const c=getChat(topic); if(!c) return;
   if(c.hidden){ c.hidden=false; saveChats(); }
   activeTopic=topic;
+  // 首次打开群聊时广播一次 reg_，让其他成员把自己加进成员表（单条 min 优先级，不耗电）
+  if(c.type==="group" && !_regSent.has(topic)){ _regSent.add(topic); broadcastReg(topic); }
   const hadUnread = c.unread>0;
   c.unread=0; c.atMe=false; saveChats(); renderChats(); updateTabBadge();
   replyingTo=null; hideQuoteBar(); hideReactBar();
@@ -2534,6 +2543,18 @@ function searchAddFriend(){
     if(!code){ toast("家聊号无效"); return; }
     addFriendDirect(code, "家聊用户");
   }, true);
+}
+// 群成员自动注册：免服务器无成员目录，靠"发言即登记 + reg_ 回执"逐步补全 c.members（@ 候选/成员列表/未读统计都受益）
+function harvestMember(topic, uidv, name){
+  if(!uidv || !name || name==="对方" || name==="我") return;
+  const c=getChat(topic); if(!c || c.type!=="group") return;
+  if(!c.members) c.members=[];
+  if(c.members.find(m=>m.uid===uidv)) return;
+  c.members.push({uid:uidv, name}); saveChats();
+  if(topic===activeTopic){ renderChats(); const t=$("chatTitle"); if(t) t.textContent=c.name+"（"+c.members.length+"）"; }
+}
+function broadcastReg(topic){
+  try{ fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":"reg", "Tags": uid+",reg_"+topic, "Priority":"min" }, body: JSON.stringify({uid:uid, name:myName||"我"})}); }catch(e){}
 }
 function createGroup(){
   promptDialog("发起群聊","给群聊起个名字（如：一家老小）","",(name)=>{
