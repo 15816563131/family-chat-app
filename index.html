@@ -484,6 +484,19 @@ body::after{width:40vw;height:40vw;right:-6vw;top:8vw;background:radial-gradient
 .row.me .chip.me{background:rgba(7,193,96,.22);border-color:rgba(7,193,96,.45);}
 .react-bar{position:fixed;left:50%;transform:translateX(-50%) translateY(10px);bottom:84px;display:none;align-items:center;gap:4px;background:rgba(255,255,255,.82);backdrop-filter:blur(14px);border:1px solid rgba(0,0,0,.08);border-radius:22px;padding:6px 8px;box-shadow:0 8px 30px rgba(0,0,0,.18);z-index:60;opacity:0;transition:opacity .15s,transform .15s;}
 .react-bar.show{display:flex;opacity:1;transform:translateX(-50%) translateY(0);}
+
+/* 搜索结果跳转到具体消息时的高亮闪烁 */
+.row.jump-hl{animation:jumpHl 1.6s ease-out;}
+@keyframes jumpHl{
+  0%{background:rgba(255,214,0,.55);box-shadow:0 0 0 2px rgba(255,193,7,.6);}
+  70%{background:rgba(255,214,0,.22);box-shadow:0 0 0 2px rgba(255,193,7,.25);}
+  100%{background:transparent;box-shadow:none;}
+}
+[data-theme="dark"] .row.jump-hl{animation:jumpHlDark 1.6s ease-out;}
+@keyframes jumpHlDark{
+  0%{background:rgba(255,214,0,.4);box-shadow:0 0 0 2px rgba(255,193,7,.5);}
+  100%{background:transparent;box-shadow:none;}
+}
 .rb-e{width:38px;height:38px;border:none;background:transparent;font-size:22px;line-height:1;cursor:pointer;border-radius:50%;transition:transform .1s,background .1s;}
 .rb-e:hover{background:rgba(0,0,0,.06);transform:scale(1.15);}
 .rb-e.on{background:rgba(7,193,96,.18);}
@@ -1387,6 +1400,7 @@ function retrySend(topic, id){
 
 // ---------- 渲染：会话列表 ----------
 let searchKw = "";
+let pendingJumpMsgId = null; // 从全局搜索结果跳进会话时，定位并高亮到具体消息
 function renderChats(){
   const box=$("chatList"); box.innerHTML="";
   if(searchKw.trim()){ renderSearchResults(searchKw.trim(), box); return; }
@@ -1425,7 +1439,7 @@ function renderSearchResults(kw, box){
     if(c.name.toLowerCase().includes(k)) results.push({topic:c.topic, name:c.name, color:c.color, snippet:"打开会话", isChat:true});
     getMsgs(c.topic).forEach(m=>{
       const t=(m.text||"").toLowerCase();
-      if(t && t.indexOf(k)>=0) results.push({topic:c.topic, name:c.name, color:c.color, snippet:(m.self?"我":(m.name||"对方"))+": "+(m.text||""), isChat:false});
+      if(t && t.indexOf(k)>=0) results.push({topic:c.topic, name:c.name, color:c.color, snippet:(m.self?"我":(m.name||"对方"))+": "+(m.text||""), isChat:false, id:m.id});
     });
   });
   if(results.length===0){
@@ -1439,7 +1453,7 @@ function renderSearchResults(kw, box){
     const pv=document.createElement("div"); pv.className="preview"; pv.textContent=(r.isChat?"":r.snippet);
     mid.appendChild(nm); mid.appendChild(pv);
     it.appendChild(av); it.appendChild(mid);
-    it.onclick=()=>{ searchKw=""; const si=$("searchInput"); if(si) si.value=""; openChat(r.topic); };
+    it.onclick=()=>{ searchKw=""; const si=$("searchInput"); if(si) si.value=""; pendingJumpMsgId = r.isChat ? null : (r.id||null); openChat(r.topic); };
     box.appendChild(it);
   });
 }
@@ -1540,7 +1554,15 @@ function renderChatFull(topic){
   });
   showNewDivider=false;
   newCount=0; updateJumpBadge(); const jb=$("jumpLatest"); if(jb) jb.classList.remove("show"); atBottom=true;
-  scrollBottom();
+  if(pendingJumpMsgId){
+    let target=null;
+    box.querySelectorAll(".row").forEach(row=>{ if(row.dataset.id===pendingJumpMsgId) target=row; });
+    pendingJumpMsgId=null;
+    if(target){ target.scrollIntoView({block:"center"}); target.classList.add("jump-hl"); setTimeout(()=>target.classList.remove("jump-hl"), 1600); }
+    else scrollBottom();
+  } else {
+    scrollBottom();
+  }
 }
 function appendSenderName(b, m){
   const c=activeTopic?getChat(activeTopic):null;
