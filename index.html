@@ -186,6 +186,14 @@
   .card .cactions button:active{background:#f0f0f0}
   .card .cactions button+button{border-left:1px solid var(--wx-line)}
   .card .cactions button.ghost{color:#555}
+  .sb-presets{display:flex;flex-wrap:wrap;gap:8px;padding:8px 14px 0}
+  .sb-p{padding:7px 12px;background:#f2f2f2;border-radius:16px;font-size:13px;color:#333;cursor:pointer}
+  .sb-p:active{background:#e3e3e3}
+  .sch-input{width:calc(100% - 36px);margin:6px 18px 0;border:1px solid #ddd;border-radius:8px;padding:10px;font-size:15px;outline:none;box-sizing:border-box}
+  .sch-list{display:flex;flex-direction:column;gap:6px}
+  .sch-item{display:flex;justify-content:space-between;align-items:center;background:#f7f7f7;border-radius:8px;padding:8px 12px;font-size:13px}
+  .sch-t{color:#444;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;margin-right:8px;text-align:left}
+  .sch-x{color:var(--wx-red,#e64340);cursor:pointer;flex:none;padding:2px 4px}
   .codebox{background:var(--wx-input);border-radius:8px;padding:10px;margin:10px 18px 4px;font-size:13px;word-break:break-all;color:var(--wx-text);user-select:all}
   .linkbox{font-size:12px;color:var(--wx-blue);word-break:break-all;padding:0 18px;margin-bottom:8px;user-select:all}
   /* 邀请二维码 */
@@ -576,6 +584,7 @@ body::after{width:40vw;height:40vw;right:-6vw;top:8vw;background:radial-gradient
       <div class="ic" id="imgBtn" title="发送图片">🖼</div>
       <div class="ic" id="atBtn" title="提醒谁看（@）">@</div>
       <div class="ic" id="emojiBtn">😊</div>
+      <div class="ic" id="scheduleBtn" title="定时发送">⏰</div>
       <textarea id="text" rows="1" placeholder="发送消息…" disabled></textarea>
       <button type="submit" class="send" id="sendBtn" disabled>发送</button>
     </form>
@@ -1292,6 +1301,92 @@ async function sendMessage(topic, text, quote){
     const subs = lsGet("fc_subs_"+topic, []);
     for(const s of subs){ if(window.FC_PUSH) FC_PUSH.sendPush(s, {title:name, body:text}).catch(()=>{}); }
   }catch(e){ updateMsgStatus(topic, id, "failed"); toast("发送失败，点击重发"); }
+}
+
+// ===== 定时发送（纯前端、零后台轮询、不打扰；关闭页面/杀死 App 则不保证） =====
+const SCHEDULE_KEY="fc_schedule_v1";
+let _scheduleTimers={};
+function getSchedule(){ return lsGet(SCHEDULE_KEY, []); }
+function setSchedule(arr){ lsSet(SCHEDULE_KEY, arr); }
+function armSchedule(item){
+  const delay = item.sendAt*1000 - Date.now();
+  if(delay<=0){ fireSchedule(item); return; }
+  clearTimeout(_scheduleTimers[item.id]);
+  // setTimeout 上限约 24.8 天；定时发送最长通常数小时，安全
+  _scheduleTimers[item.id]=setTimeout(()=>fireSchedule(item), Math.min(delay, 2147483647));
+}
+function fireSchedule(item){
+  setSchedule(getSchedule().filter(x=>x.id!==item.id));
+  clearTimeout(_scheduleTimers[item.id]); delete _scheduleTimers[item.id];
+  sendMessage(item.topic, item.text, item.quote);
+  toast("已发送定时消息");
+}
+function scheduleSend(topic, text, quote, sendAt){
+  const item={ id:"sch-"+Date.now()+"-"+Math.random().toString(36).slice(2,6), topic, text, quote:quote||null, sendAt };
+  const arr=getSchedule(); arr.push(item); setSchedule(arr); armSchedule(item);
+}
+function cancelSchedule(id){
+  setSchedule(getSchedule().filter(x=>x.id!==id));
+  clearTimeout(_scheduleTimers[id]); delete _scheduleTimers[id];
+  toast("已取消定时消息");
+}
+function armAllSchedules(){ getSchedule().forEach(armSchedule); }
+// 把 Date 转为 <input type="datetime-local"> 需要的值（本地时区、分对齐）
+function toLocalInput(d){
+  const pad=n=>String(n).padStart(2,"0");
+  return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate())+"T"+pad(d.getHours())+":"+pad(d.getMinutes());
+}
+function parseLocalInput(v){ const t=new Date(v).getTime(); return isNaN(t)?0:Math.floor(t/1000); }
+function formatScheduleList(){
+  const list=getSchedule(); if(!list.length) return '<div class="cb" style="font-size:13px;color:#999">暂无定时消息</div>';
+  return '<div class="sch-list">'+list.map(x=>{
+    const d=new Date(x.sendAt*1000);
+    const t=("0"+d.getMonth()).slice(-2)+"-"+("0"+d.getDate()).slice(-2)+" "+("0"+d.getHours()).slice(-2)+":"+("0"+d.getMinutes()).slice(-2);
+    const txt=(x.text||"").slice(0,18);
+    return '<div class="sch-item"><span class="sch-t">'+t+' · '+escapeHtml(txt)+(txt.length>=18?"…":"")+'</span><span class="sch-x" data-id="'+x.id+'">取消</span></div>';
+  }).join("")+'</div>';
+}
+function openScheduleDialog(){
+  if(!activeTopic){ toast("请先打开一个聊天"); return; }
+  const ta=$("text"); const text=ta.value.trim();
+  if(!text){ toast("请先在输入框写点内容"); return; }
+  const presets=[
+    {label:"30分钟后", d:()=>new Date(Date.now()+30*60000)},
+    {label:"1小时后", d:()=>new Date(Date.now()+60*60000)},
+    {label:"今晚20:00", d:()=>{ const x=new Date(); x.setHours(20,0,0,0); if(x.getTime()<Date.now()) x.setDate(x.getDate()+1); return x; }},
+    {label:"明早8:00", d:()=>{ const x=new Date(); x.setHours(8,0,0,0); x.setDate(x.getDate()+1); return x; }},
+    {label:"自定义", d:null},
+  ];
+  let html='<div class="ct">⏰ 定时发送</div>';
+  html+='<div class="cb" style="text-align:left">将定时发送：<br><b>'+escapeHtml(text)+'</b></div>';
+  html+='<div class="sb-presets" id="schPresets">'+presets.map((p,i)=>'<span class="sb-p" data-i="'+i+'">'+p.label+'</span>').join("")+'</div>';
+  html+='<div class="cb" style="text-align:left;margin-top:8px;font-size:13px;color:#888">或手动选择时间：</div>';
+  html+='<input type="datetime-local" id="schTime" class="sch-input">';
+  html+='<div id="schListWrap" style="margin-top:10px">'+formatScheduleList()+'</div>';
+  html+='<div class="cactions"><button class="ghost" id="schCancel">取消</button><button id="schOk">设定定时</button></div>';
+  dialogCard(html);
+  const inp=$("schTime");
+  presets.forEach((p,i)=>{
+    const el=document.querySelector('#schPresets .sb-p[data-i="'+i+'"]');
+    if(!el) return;
+    el.onclick=()=>{ if(p.d){ inp.value=toLocalInput(p.d()); inp.focus(); } else { inp.value=""; inp.focus(); } };
+  });
+  $("schListWrap").addEventListener("click",(e)=>{
+    const x=e.target.closest(".sch-x"); if(!x) return; cancelSchedule(x.getAttribute("data-id"));
+    $("schListWrap").innerHTML=formatScheduleList();
+  });
+  $("schCancel").onclick=closeDialog;
+  $("schOk").onclick=()=>{
+    const v=inp.value; const ts=parseLocalInput(v);
+    if(!ts || ts<=Date.now()/1000){ toast("请选择一个未来的时间"); return; }
+    const q=replyingTo; const topic=activeTopic;
+    const txt=ta.value.trim();
+    scheduleSend(topic, txt, q, ts);
+    // 清空输入框与引用
+    ta.value=""; autoGrow(ta); replyingTo=null; hideQuoteBar(); hideReEdit();
+    closeDialog();
+    toast("已设定定时发送");
+  };
 }
 
 function updateMsgStatus(topic, id, status){
@@ -2098,6 +2193,7 @@ form.addEventListener("submit",(e)=>{
   const ta=$("text"); const v=ta.value; ta.value=""; autoGrow(ta); hideAtPicker();
   if(activeTopic){ const q = replyingTo; replyingTo=null; hideQuoteBar(); hideReEdit(); sendMessage(activeTopic, v, q); }
 });
+$("scheduleBtn").onclick=openScheduleDialog;
 $("text").addEventListener("input",(e)=>{ autoGrow(e.target); onComposerInput(e.target); });
 $("text").addEventListener("blur",()=>setTimeout(hideAtPicker,200));
 function autoGrow(ta){ ta.style.height="auto"; ta.style.height=Math.min(ta.scrollHeight,90)+"px"; }
@@ -2918,6 +3014,7 @@ function afterName(){
   $("chatTitle").onclick=()=>{ const c=getChat(activeTopic); if(c && c.type==="group") openGroupInfo(c); };
   connectAll(); syncNative();
   connectTopic(MY_INBOX); // 订阅个人收件箱（好友请求/回执通道），不轮询、不耗电
+  armAllSchedules(); // 重新挂起页面关闭前已设定的定时消息（仅依赖前端定时器，无后台任务）
   // 后台预加载二维码库，首次打开邀请即可即时显示
   ensureQrcodeLib(function(){});
   if(!appBooted){
