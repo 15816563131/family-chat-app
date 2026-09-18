@@ -200,6 +200,11 @@
   .vcard-info{flex:1;min-width:0}
   .vcard-name{font-size:15px;font-weight:600;color:var(--wx-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .vcard-tag{font-size:12px;color:#999;margin-top:2px}
+  .read-list{max-height:46vh;overflow:auto;text-align:left}
+  .read-item{display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:1px solid var(--wx-line)}
+  .read-item:last-child{border-bottom:none}
+  .ri-av{width:36px;height:36px;border-radius:50%;flex:none;font-size:15px}
+  .ri-name{font-size:15px;color:var(--wx-text)}
   .codebox{background:var(--wx-input);border-radius:8px;padding:10px;margin:10px 18px 4px;font-size:13px;word-break:break-all;color:var(--wx-text);user-select:all}
   .linkbox{font-size:12px;color:var(--wx-blue);word-break:break-all;padding:0 18px;margin-bottom:8px;user-select:all}
   /* 邀请二维码 */
@@ -1153,7 +1158,7 @@ function handleIncoming(topic, m, fromHistory){
   if(patTagIdx>=0){ if(sender!==uid){ try{ const p=JSON.parse(m.message||"{}"); addPatLine(topic, p.from, p.to); }catch(e){} } return; }
   // 已读回执：对方读到你发的消息
   const readTagIdx = (tags||[]).findIndex(t=>typeof t==="string" && t.indexOf("read_")===0);
-  if(readTagIdx>=0){ if(sender!==uid){ try{ const ts=parseFloat(m.message||"0"); if(ts>0) markRead(topic, ts); }catch(e){} } return; }
+  if(readTagIdx>=0){ if(sender!==uid){ try{ const ts=parseFloat(m.message||"0"); if(ts>0) markRead(topic, ts, sender); }catch(e){} } return; }
   // 置顶消息同步
   const pinTagIdx = (tags||[]).findIndex(t=>typeof t==="string" && t.indexOf("pin_")===0);
   if(pinTagIdx>=0){
@@ -1509,8 +1514,7 @@ function voiceBubble(m){
   row.appendChild(av); row.appendChild(vbcol);
   if(m.self){
     const st=document.createElement("div"); st.className="st"+(m.status==="failed"?" fail":"")+(m.read?" read":"");
-    let label=""; if(m.status==="sending") label="⏳"; else if(m.status==="failed") label="⚠ 重发"; else if(m.read) label="已读"; else if(m.status==="delivered") label="已送达";
-    st.textContent=label; if(m.status==="failed") st.onclick=()=>retrySend(activeTopic, m.id); row.appendChild(st);
+applyStatus(st, m); row.appendChild(st);
   }
   attachLongPress(row, ()=>showMsgMenu(m));
   return row;
@@ -1741,14 +1745,7 @@ function bubbleEl(m){
   // 自己消息的发送状态（发送中/失败重发）
   if(m.self){
     const st=document.createElement("div"); st.className="st"+(m.status==="failed"?" fail":"")+(m.read?" read":"");
-    let label = "";
-    if(m.status==="sending") label="⏳";
-    else if(m.status==="failed") label="⚠ 重发";
-    else if(m.read) label="已读";
-    else if(m.status==="delivered") label="已送达";
-    st.textContent = label;
-    if(m.status==="failed") st.onclick=()=>retrySend(activeTopic, m.id);
-    row.appendChild(st);
+    applyStatus(st, m); row.appendChild(st);
   }
   attachLongPress(row, ()=>showMsgMenu(m));
   return row;
@@ -1797,8 +1794,7 @@ function imageBubble(m){
   row.appendChild(av); row.appendChild(ibcol);
   if(m.self){
     const st=document.createElement("div"); st.className="st"+(m.status==="failed"?" fail":"")+(m.read?" read":"");
-    let label=""; if(m.status==="sending") label="⏳"; else if(m.status==="failed") label="⚠ 重发"; else if(m.read) label="已读"; else if(m.status==="delivered") label="已送达";
-    st.textContent=label; if(m.status==="failed") st.onclick=()=>retrySend(activeTopic, m.id); row.appendChild(st);
+applyStatus(st, m); row.appendChild(st);
   }
   attachLongPress(row, ()=>showMsgMenu(m));
   return row;
@@ -1825,8 +1821,7 @@ function cardBubble(m){
   row.appendChild(av); row.appendChild(cbcol);
   if(m.self){
     const st=document.createElement("div"); st.className="st"+(m.status==="failed"?" fail":"")+(m.read?" read":"");
-    let label=""; if(m.status==="sending") label="⏳"; else if(m.status==="failed") label="⚠ 重发"; else if(m.read) label="已读"; else if(m.status==="delivered") label="已送达";
-    st.textContent=label; if(m.status==="failed") st.onclick=()=>retrySend(activeTopic, m.id); row.appendChild(st);
+applyStatus(st, m); row.appendChild(st);
   }
   attachLongPress(row, ()=>showMsgMenu(m));
   return row;
@@ -2105,10 +2100,45 @@ function sendRead(topic){
   try{ fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":"read", "Tags": uid+",read_"+topic, "Priority":"min" }, body:String(ts)}); }catch(e){}
 }
 function maybeSendRead(topic){ const now=Date.now(); if(now-lastReadSent<2500) return; lastReadSent=now; sendRead(topic); }
-function markRead(topic, ts){
+function markRead(topic, ts, readerUid){
   const msgs=getMsgs(topic); let changed=false;
-  msgs.forEach(x=>{ if(x.self && x.time<=ts && !x.read){ x.read=true; changed=true; } });
+  msgs.forEach(x=>{ if(x.self && x.time<=ts){ if(!x.read){ x.read=true; changed=true; } if(readerUid){ x.readBy=x.readBy||{}; if(x.readBy[readerUid]!==ts){ x.readBy[readerUid]=ts; changed=true; } } } });
   if(changed){ setMsgs(topic, msgs); if(topic===activeTopic) renderChatFull(topic); }
+}
+// 已读回执状态条：自己发的消息下方显示「已读 / X人已读 / 已送达」，点开可看谁已读
+function applyStatus(st, m){
+  const c=activeTopic?getChat(activeTopic):null;
+  const readers=(m.readBy && Object.keys(m.readBy)) || [];
+  let label="";
+  if(m.status==="sending") label="⏳";
+  else if(m.status==="failed") label="⚠ 重发";
+  else if(readers.length){ label = (c && c.type==="group") ? (readers.length+"人已读") : "已读"; }
+  else if(m.read){ label="已读"; }
+  else if(m.status==="delivered") label="已送达";
+  st.textContent=label;
+  if(m.status==="failed"){ st.onclick=()=>retrySend(activeTopic, m.id); }
+  else if(readers.length){ st.style.cursor="pointer"; st.onclick=()=>openReadPanel(activeTopic, m); }
+}
+function openReadPanel(topic, m){
+  const c=getChat(topic);
+  const readers=(m.readBy&&Object.keys(m.readBy))||[];
+  if(!readers.length){ toast("还没有人已读"); return; }
+  const nameOf=(uid)=>{
+    if(c && c.type==="group" && c.members){ const mem=c.members.find(x=>x.uid===uid); if(mem&&mem.name) return mem.name; }
+    if(c && c.type!=="group" && c.peerUid===uid && c.name) return c.name;
+    const msgs=getMsgs(topic);
+    for(const x of msgs){ if(x.sender===uid && x.name) return x.name; }
+    return "成员";
+  };
+  const sorted=readers.slice().sort((a,b)=>(m.readBy[b]||0)-(m.readBy[a]||0));
+  let sub="";
+  if(c && c.type==="group" && c.members){ const unread=c.members.filter(mem=>!readers.includes(mem.uid)).length; if(unread>0) sub="，还有 "+unread+" 人未读"; }
+  let html='<div class="ct">已读（'+readers.length+'）'+escapeHtml(sub)+'</div><div class="cb" style="padding:0 14px 10px"><div class="read-list">';
+  sorted.forEach(uid=>{ html+='<div class="read-item" id="ri_'+uid+'"><span class="ri-name">'+escapeHtml(nameOf(uid))+'</span></div>'; });
+  html+='</div></div><div class="cactions"><button id="dOk">知道了</button></div>';
+  dialogCard(html);
+  $("dOk").onclick=closeDialog;
+  sorted.forEach(uid=>{ const el=document.getElementById("ri_"+uid); if(el){ const av=document.createElement("div"); av.className="ri-av"; paintAvatar(av, nameOf(uid), uid, false, "#07C160"); el.insertBefore(av, el.firstChild); } });
 }
 
 // ---------- 聊天置顶消息 ----------
