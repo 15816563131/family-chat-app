@@ -1356,7 +1356,8 @@ function voiceBubble(m){
   const dur=document.createElement("div"); dur.className="voice-dur"; dur.textContent=(m.dur||0)+"″";
   b.appendChild(play); b.appendChild(dur);
   play.onclick=()=>{ try{ const a=new Audio(m.voice); a.play(); play.textContent="⏸"; a.onended=()=>{ play.textContent="▶"; }; }catch(e){ toast("无法播放"); } };
-  row.appendChild(av); row.appendChild(b);
+  const vbcol=document.createElement("div"); vbcol.className="bcol"; vbcol.appendChild(b); const vrb=reactionBlock(m); if(vrb) vbcol.appendChild(vrb);
+  row.appendChild(av); row.appendChild(vbcol);
   if(m.self){
     const st=document.createElement("div"); st.className="st"+(m.status==="failed"?" fail":"")+(m.read?" read":"");
     let label=""; if(m.status==="sending") label="⏳"; else if(m.status==="failed") label="⚠ 重发"; else if(m.read) label="已读"; else if(m.status==="delivered") label="已送达";
@@ -1608,7 +1609,8 @@ function mergeBubble(m){
   html+='<div class="merge-foot">共 '+items.length+' 条聊天记录</div>';
   b.innerHTML=html;
   b.onclick=()=>{ if(selectMode) return; showMergeDetail(items); };
-  row.appendChild(av); row.appendChild(b);
+  const mbcol=document.createElement("div"); mbcol.className="bcol"; mbcol.appendChild(b); const mrb=reactionBlock(m); if(mrb) mbcol.appendChild(mrb);
+  row.appendChild(av); row.appendChild(mbcol);
   attachLongPress(row, ()=>showMsgMenu(m));
   return row;
 }
@@ -1628,7 +1630,8 @@ function imageBubble(m){
   appendSenderName(b, m);
   const im=document.createElement("img"); im.src=m.img||""; b.appendChild(im);
   im.onerror=()=>{ const d=document.createElement("div"); d.className="img-expired"; d.textContent="图片已过期或不可见"; if(im.parentNode) im.parentNode.replaceChild(d, im); };
-  row.appendChild(av); row.appendChild(b);
+  const ibcol=document.createElement("div"); ibcol.className="bcol"; ibcol.appendChild(b); const irb=reactionBlock(m); if(irb) ibcol.appendChild(irb);
+  row.appendChild(av); row.appendChild(ibcol);
   if(m.self){
     const st=document.createElement("div"); st.className="st"+(m.status==="failed"?" fail":"")+(m.read?" read":"");
     let label=""; if(m.status==="sending") label="⏳"; else if(m.status==="failed") label="⚠ 重发"; else if(m.read) label="已读"; else if(m.status==="delivered") label="已送达";
@@ -1700,7 +1703,7 @@ function showMsgMenu(m){
   if(m.text) opts.push({label:"收藏", fn:()=>addFav(m)});
   if(m.text) opts.push({label:"提醒", fn:()=>scheduleReminder(m)});
   opts.push({label:"拍一拍", fn:()=>doPat(m.self?(myName||"我"):(m.name||"对方"))});
-  if(m.text) opts.push({label:"回应", fn:()=>showReactBar(m)});
+  opts.push({label:"回应", fn:()=>showReactBar(m)}); // 所有消息类型均可回应（图片/语音/合并转发不再被 m.text 限制）
   opts.push({label:"多选", fn:()=>enterSelect(m)});
   const curPin = activeTopic?getChat(activeTopic).pinned:null;
   if(m.text && (!curPin || curPin.id!==m.id)) opts.push({label:"置顶", fn:()=>pinMessage(m)});
@@ -1713,6 +1716,13 @@ function showMsgMenu(m){
 // 消息表情回应（reactions）：长按消息「回应」→ 选 emoji；经 ntfy 控制消息 react_<topic> 广播同步
 const REACT_EMOJIS = ["👍","❤️","😂","🎉","😮","💔"];
 function msgReactions(m){ return (m && m.reactions && typeof m.reactions==="object") ? m.reactions : {}; }
+function reactionBlock(m){
+  const rmap=msgReactions(m); const rkeys=Object.keys(rmap);
+  if(!rkeys.length) return null;
+  const rc=document.createElement("div"); rc.className="reactions";
+  rkeys.forEach(e=>{ const uids=rmap[e]||[]; const chip=document.createElement("div"); chip.className="chip"+(uids.indexOf(uid)>=0?" me":""); chip.textContent=e+(uids.length>1?(" "+uids.length):""); chip.onclick=(ev)=>{ ev.stopPropagation(); toggleReaction(activeTopic, m.id, e); }; rc.appendChild(chip); });
+  return rc;
+}
 function toggleReaction(topic, id, emoji){
   const msgs=getMsgs(topic); const m=msgs.find(x=>x.id===id); if(!m) return;
   const map=msgReactions(m); const arr=(map[emoji]||[]).slice();
