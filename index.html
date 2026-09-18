@@ -200,6 +200,13 @@
   .vcard-info{flex:1;min-width:0}
   .vcard-name{font-size:15px;font-weight:600;color:var(--wx-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .vcard-tag{font-size:12px;color:#999;margin-top:2px}
+  .bubble.loc-msg{max-width:230px;padding:10px}
+  .vloc{display:flex;align-items:center;gap:10px;cursor:pointer}
+  .vloc-pin{width:42px;height:42px;border-radius:8px;flex:none;font-size:20px;display:flex;align-items:center;justify-content:center;background:rgba(7,193,96,.12)}
+  .vloc-info{flex:1;min-width:0}
+  .vloc-name{font-size:15px;font-weight:600;color:var(--wx-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .vloc-coord{font-size:12px;color:#999;margin-top:2px}
+  .ic.loading{opacity:.5}
   .read-list{max-height:46vh;overflow:auto;text-align:left}
   .read-item{display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:1px solid var(--wx-line)}
   .read-item:last-child{border-bottom:none}
@@ -596,6 +603,7 @@ body::after{width:40vw;height:40vw;right:-6vw;top:8vw;background:radial-gradient
       <div class="ic" id="atBtn" title="提醒谁看（@）">@</div>
       <div class="ic" id="emojiBtn">😊</div>
       <div class="ic" id="scheduleBtn" title="定时发送">⏰</div>
+      <div class="ic" id="locBtn" title="发送位置">📍</div>
       <textarea id="text" rows="1" placeholder="发送消息…" disabled></textarea>
       <button type="submit" class="send" id="sendBtn" disabled>发送</button>
     </form>
@@ -1201,6 +1209,9 @@ function handleIncoming(topic, m, fromHistory){
   // 名片消息：body JSON {card:{uid,name,avatar,topic}}，点击可打开对方私聊
   const cardTag = tags.find(t=>typeof t==="string" && t==="card");
   if(cardTag){ if(sender!==uid){ try{ const p=JSON.parse(m.message||"{}"); if(p&&p.card){ addLocalMsg(topic, {id:m.id, sender, name:decTitle(m.title)||"对方", text:"", card:p.card, time:(m.time||Date.now()/1000), self:false, type:"card"}, {silentUnread:false}); if(!fromHistory) playNewMsgCue(topic); } }catch(e){} harvestMember(topic, sender, decTitle(m.title)||"对方"); } return; }
+  // 位置消息：body JSON {loc:{lat,lng,label}}，渲染成地图卡片；对方点击可在合规地图中打开
+  const locTag = tags.find(t=>typeof t==="string" && t==="loc");
+  if(locTag){ if(sender!==uid){ try{ const p=JSON.parse(m.message||"{}"); if(p&&p.loc){ addLocalMsg(topic, {id:m.id, sender, name:decTitle(m.title)||"对方", text:"[位置]", loc:p.loc, time:(m.time||Date.now()/1000), self:false, type:"location"}, {silentUnread:false}); if(!fromHistory) playNewMsgCue(topic); } }catch(e){} harvestMember(topic, sender, decTitle(m.title)||"对方"); } return; }
   // 群聊：把发言者登记进成员表（标题为真实昵称；控制消息已在上面 return 掉）
   if(sender!==uid){ const sn=decTitle(m.title)||"对方"; if(sn!=="对方") harvestMember(topic, sender, sn); }
   if(sender===uid) return; // 跳过自己（含撤回/打字回声）
@@ -1441,6 +1452,59 @@ function showCardPicker(topic){
   })));
 }
 
+// ---------- 位置分享（免服务器：坐标作为消息发出，点击在合规地图打开） ----------
+// WGS-84 → GCJ-02（火星坐标）：高德/腾讯地图使用 GCJ-02，navigator.geolocation 返回 WGS-84，需转换
+function outOfChina(lat, lng){ return !(lng>73.66 && lng<135.05 && lat>3.86 && lat<53.55); }
+function transformLat(lng, lat){ let ret=-100+2*lng+3*lat+0.2*lat*lng+0.2*lat*lng+0.1*Math.sqrt(Math.abs(lng))+(20*Math.sin(6*lng*Math.PI)+20*Math.sin(2*lng*Math.PI))*2/3+(20*Math.sin(lat*Math.PI)+40*Math.sin(lat/3*Math.PI))*2/3+(160*Math.sin(lat/12*Math.PI)+320*Math.sin(lat*Math.PI/30))*2/3; return ret; }
+function transformLng(lng, lat){ let ret=300+lng+2*lat+0.1*lng*lng+0.1*lng*lat+0.1*Math.sqrt(Math.abs(lng))+(20*Math.sin(6*lng*Math.PI)+20*Math.sin(2*lng*Math.PI))*2/3+(20*Math.sin(lng*Math.PI)+40*Math.sin(lng/3*Math.PI))*2/3+(150*Math.sin(lng/12*Math.PI)+300*Math.sin(lng/30*Math.PI))*2/3; return ret; }
+function wgs84ToGcj02(lat, lng){
+  if(outOfChina(lat, lng)) return [lat, lng];
+  let dlat = transformLat(lng-105, lat-35);
+  let dlng = transformLng(lng-105, lat-35);
+  const radlat = lat/180*Math.PI;
+  let magic = Math.sin(radlat);
+  magic = 1 - 0.00669342162296594323*magic*magic;
+  const sqrtMagic = Math.sqrt(magic);
+  dlat = (dlat*180)/((6335549.0862321*(1-0.00669342162296594323))/(magic*sqrtMagic)*Math.PI);
+  dlng = (dlng*180)/(6378245.0/sqrtMagic*Math.cos(radlat)*Math.PI);
+  return [lat+dlat, lng+dlng];
+}
+// 打开高德地图（合规白名单：高德；坐标转 GCJ-02；不内嵌任何 API key；仅做「在地图中打开」跳转）
+function openMapLink(lat, lng, label){
+  if(lat==null || lng==null) return;
+  const g = wgs84ToGcj02(lat, lng);
+  const url = "https://uri.amap.com/marker?position="+g[1].toFixed(6)+","+g[0].toFixed(6)+"&name="+encodeURIComponent(label||"位置")+"&src=familychat&coordinate=gaode&callnative=1";
+  try{ const w=window.open(url, "_blank"); if(!w) location.href=url; }catch(e){ location.href=url; }
+}
+async function sendLocationMsg(topic, lat, lng, label){
+  if(lat==null || lng==null) return;
+  const name = myName || "我";
+  const id = "local-"+Date.now()+"-"+Math.random().toString(36).slice(2,6);
+  const body = JSON.stringify({loc:{lat, lng, label:label||""}});
+  addLocalMsg(topic, {id, sender:uid, name, type:"location", loc:{lat,lng,label:label||""}, text:"[位置]", time:Date.now()/1000, self:true, status:"sending"}, {silentUnread:true});
+  try{
+    await fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":encTitle(name), "Tags":uid+",loc", "Priority":"3" }, body:body});
+    updateMsgStatus(topic, id, "delivered");
+    const subs = lsGet("fc_subs_"+topic, []); for(const s of subs){ if(window.FC_PUSH) FC_PUSH.sendPush(s, {title:name, body:"[位置] "+(label||"")}).catch(()=>{}); }
+  }catch(e){ updateMsgStatus(topic, id, "failed"); toast("发送失败，点击重发"); }
+}
+// 点「📍 发送位置」：取当前 GPS 坐标 → 确认后发出。仅在用户点击时触发，不轮询/不耗电
+function openLocationPicker(topic){
+  if(!topic) return;
+  if(!navigator.geolocation){ toast("当前环境不支持定位"); return; }
+  const btn=$("locBtn"); if(btn) btn.classList.add("loading");
+  navigator.geolocation.getCurrentPosition((pos)=>{
+    if(btn) btn.classList.remove("loading");
+    const lat=pos.coords.latitude, lng=pos.coords.longitude;
+    confirmDialog("发送位置", "将把当前位置（经纬度）发送给对方，对方可在地图中打开查看。", ()=>{
+      sendLocationMsg(topic, lat, lng, "我的位置"); toast("已发送位置");
+    });
+  }, (err)=>{
+    if(btn) btn.classList.remove("loading");
+    toast("无法获取位置："+(err && err.message ? err.message : "请检查定位权限"));
+  }, {enableHighAccuracy:false, timeout:8000, maximumAge:60000});
+}
+
 function updateMsgStatus(topic, id, status){
   const msgs=getMsgs(topic); const m=msgs.find(x=>x.id===id);
   if(!m) return; m.status=status; setMsgs(topic, msgs);
@@ -1541,6 +1605,10 @@ function retrySend(topic, id){
   }
   if(m.type==="card" && m.card){
     fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":encTitle(myName||"我"), "Tags":uid+",card", "Priority":"3" }, body:JSON.stringify({card:m.card})})
+      .then(()=>updateMsgStatus(topic, id, "delivered")).catch(()=>updateMsgStatus(topic, id, "failed")); return;
+  }
+  if(m.type==="location" && m.loc){
+    fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":encTitle(myName||"我"), "Tags":uid+",loc", "Priority":"3" }, body:JSON.stringify({loc:m.loc})})
       .then(()=>updateMsgStatus(topic, id, "delivered")).catch(()=>updateMsgStatus(topic, id, "failed")); return;
   }
   fetch(BASE+"/"+topic, {method:"POST", headers:{ "Title":encTitle(myName||"我"), "Tags":uid, "Priority":"3" }, body:m.text})
@@ -1726,6 +1794,7 @@ function bubbleEl(m){
   if(m.type==="image"){ return imageBubble(m); }
   if(m.type==="voice"){ return voiceBubble(m); }
   if(m.type==="card"){ return cardBubble(m); }
+  if(m.type==="location"){ return locationBubble(m); }
   if(m.merge){ return mergeBubble(m); }
   const row=document.createElement("div"); row.className="row "+(m.self?"me":"other"); row.dataset.id=m.id;
   if(selectMode && selected.has(m.id)) row.classList.add("selected");
@@ -1831,6 +1900,33 @@ function cardBubble(m){
   if(m.self){
     const st=document.createElement("div"); st.className="st"+(m.status==="failed"?" fail":"")+(m.read?" read":"");
 applyStatus(st, m); row.appendChild(st);
+  }
+  attachLongPress(row, ()=>showMsgMenu(m));
+  return row;
+}
+function locationBubble(m){
+  const row=document.createElement("div"); row.className="row "+(m.self?"me":"other"); row.dataset.id=m.id;
+  if(selectMode && selected.has(m.id)) row.classList.add("selected");
+  const c=activeTopic?getChat(activeTopic):null;
+  const av=document.createElement("div"); av.className="av";
+  paintAvatar(av, m.self?(myName||"我"):(m.name||"对方"), m.sender, m.self, m.self?"#07C160":(c?c.color:colorFrom(m.sender||m.name)));
+  const b=document.createElement("div"); b.className="bubble loc-msg";
+  appendSenderName(b, m);
+  const loc=m.loc||{};
+  const inner=document.createElement("div"); inner.className="vloc";
+  const pin=document.createElement("div"); pin.className="vloc-pin"; pin.textContent="📍";
+  const info=document.createElement("div"); info.className="vloc-info";
+  const nm=document.createElement("div"); nm.className="vloc-name"; nm.textContent=(m.self?"我的位置":(loc.label||"位置"));
+  const ct=document.createElement("div"); ct.className="vloc-coord"; ct.textContent=(loc.lat!=null?loc.lat.toFixed(5):"")+", "+(loc.lng!=null?loc.lng.toFixed(5):"");
+  info.appendChild(nm); info.appendChild(ct);
+  inner.appendChild(pin); inner.appendChild(info);
+  b.appendChild(inner);
+  inner.onclick=()=>{ if(selectMode) return; openMapLink(loc.lat, loc.lng, loc.label||(m.self?"我的位置":(m.name||"位置"))); };
+  const cbcol=document.createElement("div"); cbcol.className="bcol"; cbcol.appendChild(b); const crb=reactionBlock(m); if(crb) cbcol.appendChild(crb);
+  row.appendChild(av); row.appendChild(cbcol);
+  if(m.self){
+    const st=document.createElement("div"); st.className="st"+(m.status==="failed"?" fail":"")+(m.read?" read":"");
+    applyStatus(st, m); row.appendChild(st);
   }
   attachLongPress(row, ()=>showMsgMenu(m));
   return row;
@@ -2306,6 +2402,7 @@ form.addEventListener("submit",(e)=>{
   if(activeTopic){ const q = replyingTo; replyingTo=null; hideQuoteBar(); hideReEdit(); sendMessage(activeTopic, v, q); }
 });
 $("scheduleBtn").onclick=openScheduleDialog;
+$("locBtn").onclick=()=>openLocationPicker(activeTopic);
 $("text").addEventListener("input",(e)=>{ autoGrow(e.target); onComposerInput(e.target); });
 $("text").addEventListener("blur",()=>setTimeout(hideAtPicker,200));
 function autoGrow(ta){ ta.style.height="auto"; ta.style.height=Math.min(ta.scrollHeight,90)+"px"; }
@@ -2510,6 +2607,7 @@ $("chatMore").onclick=()=>{
     {label: c.mute ? "允许消息通知" : "消息免打扰", fn:()=>{ c.mute=!c.mute; saveChats(); syncNative(); toast(c.mute?"已免打扰":"已开启通知"); }},
     {label:"邀请家人加入", fn:()=>showInvite(c)},
     {label:"发名片", fn:()=>showCardPicker(activeTopic)},
+    {label:"发送位置", fn:()=>openLocationPicker(activeTopic)},
     {label:"修改名称", fn:()=>renameChat(c)},
     {label:"搜索聊天记录", fn:()=>startChatSearch()},
     {label:"清空聊天记录", danger:false, fn:()=>confirmDialog("清空聊天记录","将删除该会话的全部消息，确定？",()=>{ setMsgs(activeTopic,[]); c.lastMsg=""; c.lastTime=0; saveChats(); renderChatFull(activeTopic); renderChats(); toast("已清空"); })},
