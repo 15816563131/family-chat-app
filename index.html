@@ -637,6 +637,7 @@ body::after{width:40vw;height:40vw;right:-6vw;top:8vw;background:radial-gradient
         <div class="mi" id="backupExport"><span>聊天与账号备份</span><span><span class="chev">›</span></span></div>
         <div class="mi" id="backupImport"><span>恢复备份</span><span><span class="chev">›</span></span></div>
         <div class="mi" id="about"><span>关于家聊</span><span><span class="chev">›</span></span></div>
+        <div class="mi" id="crashLog"><span>崩溃日志（调试）</span><span><span class="chev">›</span></span></div>
       </div>
       <div class="menu" style="margin-top:10px">
         <div class="mi" id="inviteFriend"><span>把家聊分享给家人</span><span><span class="chev">›</span></span></div>
@@ -3027,7 +3028,16 @@ $("clearAll").onclick=()=>confirmDialog("清空所有聊天记录","将删除全
   chats.forEach(c=>setMsgs(c.topic,[])); chats.forEach(c=>{c.lastMsg="";c.lastTime=0;}); saveChats();
   if(activeTopic) renderChatFull(activeTopic); renderChats(); toast("已清空");
 });
-$("about").onclick=()=>{ dialogCard(`<div class="ct">关于家聊</div><div class="cb">家聊 · 免服务器家庭聊天<br>消息经免费公共服务中转<br>后台/关闭也能收到通知<br><br>版本 v2.0（微信风格）</div><div class="cactions"><button id="dOk">好的</button></div>`); $("dOk").onclick=closeDialog; };
+$("about").onclick=()=>{ dialogCard(`<div class="ct">关于家聊</div><div class="cb">家聊 · 免服务器家庭聊天<br>消息经免费公共服务中转<br>后台/关闭也能收到通知<br><br>版本 v2.0.2（微信风格）</div><div class="cactions"><button id="dOk">好的</button></div>`); $("dOk").onclick=closeDialog; };
+// 崩溃日志查看（调试用）：读取安卓原生层记录的最近崩溃，便于反馈问题
+$("crashLog").onclick=()=>{
+  let logs="";
+  try{ if(window.AndroidBridge && AndroidBridge.getCrashLogs) logs=AndroidBridge.getCrashLogs()||""; }catch(e){ logs="读取失败："+e; }
+  if(!logs) logs="（暂无崩溃日志。此功能仅在安卓 App 内可用）";
+  dialogCard('<div class="ct">崩溃日志</div><div class="cb" style="max-height:55vh;overflow:auto;white-space:pre-wrap;font-size:12px;text-align:left">'+escapeHtml(String(logs))+'</div><div class="cactions"><button id="dCopy">复制</button><button id="dOk">好的</button></div>');
+  $("dCopy").onclick=()=>copyText(String(logs),"已复制崩溃日志");
+  $("dOk").onclick=closeDialog;
+};
 $("inviteFriend").onclick=()=>{
   const link=(location.protocol.indexOf("http")===0?location.origin+location.pathname:"https://15816563131.github.io/family-chat-app/");
   dialogCard(`<div class="ct">分享家聊</div><div class="cb">把链接发给家人，他们也能用浏览器或安装 APP 使用。</div><div class="linkbox" id="applink">${escapeHtml(link)}</div><div class="cactions"><button class="ghost" id="dClose">关闭</button><button id="dCopyApp">复制链接</button></div>`);
